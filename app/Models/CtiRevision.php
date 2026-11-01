@@ -31,4 +31,9 @@ class CtiRevision extends Model
     {
         return $this->belongsTo(CtiRecord::class);
     }
+
+    public function updatedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'updated_by_user_id');
+    }
 }

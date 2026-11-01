@@ -1,0 +1,388 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\CtiIoc;
+use App\Models\CtiNote;
+use App\Models\CtiRecord;
+use App\Models\CtiReport;
+use App\Models\CtiRevision;
+use App\Models\ReportTemplate;
+use App\Services\CtiExportService;
+use App\Services\IocCheckService;
+use App\Services\ReportRenderer;
+use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Inertia\Inertia;
+
+class CtiRepositoryController extends Controller
+{
+    /**
+     * CTI Repository (spec Section 6): full-text search, multi-facet filters,
+     * server-side pagination.
+     */
+    public function index(Request $request)
+    {
+        $records = CtiRecord::query()
+            ->with('iocs:ioc_type,value,verdict,cti_record_id')
+            ->when($request->input('search'), function ($q, $s) {
+                $q->where(function ($qq) use ($s) {
+                    $qq->whereRaw("search @@ plainto_tsquery('english', ?)", [$s]);
+
+                    if (preg_match('/CVE-\d{4}-\d{4,}/i', $s)) {
+                        $qq->orWhereRaw('cves::text ILIKE ?', ['%'.$s.'%']);
+                    }
+                });
+            })
+            ->when($request->input('type'), fn ($q, $v) => $q->where('type', $v))
+            ->when($request->input('severity'), fn ($q, $v) => $q->where('severity', $v))
+            ->when($request->input('tlp'), fn ($q, $v) => $q->where('tlp', $v))
+            ->when($request->input('workflow_status'), fn ($q, $v) => $q->where('workflow_status', $v))
+            ->when($request->boolean('developing'), fn ($q) => $q->where('is_developing', true))
+            ->when($request->input('ioc_verdict'), fn ($q, $v) => $q->whereHas('iocs', fn ($iq) => $iq->where('verdict', $v)))
+            ->when($request->input('source_feed'), fn ($q, $v) => $q->whereRaw('sources::text ILIKE ?', ['%'.$v.'%']))
+            ->when($request->boolean('focus_matched'), fn ($q) => $q->whereNotNull('matched_focus_keywords'))
+            ->when($request->input('published_from'), fn ($q, $v) => $q->where('published_at', '>=', $v))
+            ->when($request->input('published_to'), fn ($q, $v) => $q->where('published_at', '<=', $v.' 23:59:59'))
+            ->when($request->input('modified_from'), fn ($q, $v) => $q->where('modified_at', '>=', $v))
+            ->when($request->input('modified_to'), fn ($q, $v) => $q->where('modified_at', '<=', $v.' 23:59:59'))
+            ->orderByDesc('modified_at')
+            ->paginate(15)
+            ->withQueryString();
+
+        return Inertia::render('CtiRepository/Index', [
+            'records' => $records,
+            'filters' => $request->only([
+                'search', 'type', 'severity', 'tlp', 'workflow_status', 'developing',
+                'ioc_verdict', 'source_feed', 'focus_matched',
+                'published_from', 'published_to', 'modified_from', 'modified_to',
+            ]),
+            'templates' => ReportTemplate::query()->orderBy('name')->get(['id', 'name', 'is_default']),
+        ]);
+    }
+
+    public function show(CtiRecord $record)
+    {
+        $record->load([
+            'iocs',
+            'revisions' => fn ($q) => $q->with('updatedBy:id,name')->latest('created_at'),
+            'notes' => fn ($q) => $q->with('user:id,name')->latest(),
+        ]);
+
+        return Inertia::render('CtiRepository/Show', [
+            'record' => $record,
+            'templates' => ReportTemplate::query()->orderBy('name')->get(['id', 'name', 'is_default']),
+        ]);
+    }
+
+    public function edit(CtiRecord $record)
+    {
+        $record->load('iocs');
+
+        return Inertia::render('CtiRepository/Edit', [
+            'record' => $record,
+        ]);
+    }
+
+    /**
+     * Analyst edit (spec Section 7): revision-tracked, bumps modified_at and
+     * revision_count, refreshes the developing flag.
+     */
+    public function update(Request $request, CtiRecord $record)
+    {
+        $data = $this->validated($request);
+
+        $before = $record->only(array_keys($data));
+        $changes = collect($data)->filter(fn ($v, $k) => $record->{$k} != $v)->all();
+
+        $record->fill($changes);
+        $record->modified_at = now();
+        $record->revision_count += 1;
+        $record->refreshDevelopingFlag();
+        $record->save();
+
+        // Optional new IOCs added from the editor.
+        $iocsAdded = 0;
+        foreach ($data['iocs_add'] ?? [] as $ioc) {
+            $record->iocs()->firstOrCreate(
+                ['ioc_type' => $ioc['type'], 'value' => $ioc['value']],
+                ['defanged_value' => CtiIoc::defang($ioc['value'], $ioc['type'])]
+            );
+            $iocsAdded++;
+        }
+
+        if ($iocsAdded > 0) {
+            $changes['iocs'] = "+{$iocsAdded} IOC(s)";
+        }
+
+        CtiRevision::create([
+            'cti_record_id' => $record->id,
+            'updated_by_user_id' => $request->user()->id,
+            'fields_updated' => array_keys($changes) ?: ['no-op'],
+            'previous_values' => $before,
+            'new_values' => $record->only(array_keys($data)),
+            'created_at' => now(),
+        ]);
+
+        activity()->causedBy($request->user())->performedOn($record)->event('updated')
+            ->log("Edited CTI {$record->cti_id}");
+
+        return redirect()->route('cti.show', $record)->with('success', "CTI {$record->cti_id} updated (Rev {$record->revision_count}).");
+    }
+
+    public function destroy(Request $request, CtiRecord $record)
+    {
+        $ctiId = $record->cti_id;
+        $record->delete();
+
+        activity()->causedBy($request->user())->event('deleted')->log("Deleted CTI {$ctiId}");
+
+        return redirect()->route('cti.index')->with('success', "CTI {$ctiId} deleted.");
+    }
+
+    public function bulkStatus(Request $request)
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array'],
+            'ids.*' => ['integer', 'exists:cti_records,id'],
+            'workflow_status' => ['required', Rule::in(CtiRecord::WORKFLOW_STATUSES)],
+        ]);
+
+        CtiRecord::query()->whereIn('id', $data['ids'])->update([
+            'workflow_status' => $data['workflow_status'],
+            'modified_at' => now(),
+        ]);
+
+        activity()->causedBy($request->user())->event('bulk_updated')
+            ->log('Bulk status change to '.$data['workflow_status'].' on '.count($data['ids']).' CTIs');
+
+        return back()->with('success', 'Bulk status applied to '.count($data['ids']).' CTIs.');
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array'],
+            'ids.*' => ['integer', 'exists:cti_records,id'],
+        ]);
+
+        $count = count($data['ids']);
+        CtiRecord::query()->whereIn('id', $data['ids'])->delete();
+
+        activity()->causedBy($request->user())->event('bulk_deleted')
+            ->log("Bulk deleted {$count} CTIs");
+
+        return back()->with('success', "{$count} CTIs deleted.");
+    }
+
+    public function exportCsv(Request $request, CtiExportService $export)
+    {
+        $records = $this->recordsForExport($request);
+
+        return response($export->toCsv($records), 200, [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="cti-export-'.now()->format('Ymd-His').'.csv"',
+        ]);
+    }
+
+    public function exportStix(Request $request, CtiExportService $export)
+    {
+        $records = $this->recordsForExport($request);
+
+        return response()->json($export->toStix($records), 200, [
+            'Content-Disposition' => 'attachment; filename="cti-export-'.now()->format('Ymd-His').'.stix.json"',
+        ]);
+    }
+
+    /** Machine-readable IOC feed for SIEM/EDR polling (spec Section 8). */
+    public function iocFeed(Request $request)
+    {
+        $verdicts = collect(explode(',', (string) $request->input('verdict', 'Malicious')))
+            ->map(fn ($v) => trim($v))
+            ->filter(fn ($v) => in_array($v, CtiIoc::VERDICTS, true))
+            ->values();
+
+        if ($verdicts->isEmpty()) {
+            $verdicts = collect(['Malicious']);
+        }
+
+        $iocs = CtiIoc::query()
+            ->whereIn('verdict', $verdicts->all())
+            ->when($request->input('since'), fn ($q, $since) => $q->whereHas(
+                'ctiRecord',
+                fn ($cq) => $cq->where('modified_at', '>=', $since)
+            ))
+            ->with('ctiRecord:id,cti_id,subject,modified_at')
+            ->get();
+
+        return match ($request->input('format', 'txt')) {
+            'csv' => response(collect([['ioc_type', 'value', 'verdict', 'cti_id']])
+                ->concat($iocs->map(fn (CtiIoc $i) => [
+                    $i->ioc_type, $i->value, $i->verdict, $i->ctiRecord?->cti_id,
+                ]))
+                ->map(fn (array $row) => implode(',', $row))
+                ->implode("\n"), 200, ['Content-Type' => 'text/csv']),
+            'stix' => response()->json((new CtiExportService())->toStix($iocs->map(fn ($i) => $i->ctiRecord)->unique('id')->filter())),
+            default => response($iocs->pluck('value')->implode("\n"), 200, ['Content-Type' => 'text/plain']),
+        };
+    }
+
+    /** "Quick Report" from a table row (spec Section 6). */
+    public function quickReport(Request $request, CtiExportService $export, ReportRenderer $renderer)
+    {
+        $data = $this->validateReportRequest($request);
+        $html = $this->renderReports(CtiRecord::query()->whereIn('id', $data['cti_ids'])->orderBy('cti_id')->get(), $data, $export, $renderer);
+
+        return back()->with('testResult', ['type' => 'report_preview', 'html' => $html]);
+    }
+
+    /** Report preview from the detail view (spec Section 7). */
+    public function preview(Request $request, CtiExportService $export, ReportRenderer $renderer)
+    {
+        $data = $this->validateReportRequest($request);
+        $html = $this->renderReports(CtiRecord::query()->whereIn('id', $data['cti_ids'])->orderBy('cti_id')->get(), $data, $export, $renderer);
+
+        return back()->with('testResult', ['type' => 'report_preview', 'html' => $html]);
+    }
+
+    /** Print-ready PDF via DomPDF (spec Section 7). */
+    public function generatePdf(Request $request, CtiExportService $export, ReportRenderer $renderer)
+    {
+        $data = $this->validateReportRequest($request);
+
+        $records = CtiRecord::query()->whereIn('id', $data['cti_ids'])->orderBy('cti_id')->get();
+        $html = $this->renderReports($records, $data, $export, $renderer);
+
+        $pdf = new \Dompdf\Dompdf(['isRemoteEnabled' => true, 'defaultFont' => 'DejaVu Sans']);
+        $pdf->loadHtml($html);
+        $pdf->setPaper('a4', 'portrait');
+        $pdf->render();
+
+        $path = 'reports/'.Str::uuid().'.pdf';
+        Storage::put($path, $pdf->output());
+
+        $report = CtiReport::create([
+            'template_id' => $data['template_id'],
+            'generated_by_user_id' => $request->user()->id,
+            'title' => 'CTI Report — '.collect($data['cti_ids'])->count().' record(s)',
+            'cti_record_ids' => $data['cti_ids'],
+            'file_path' => $path,
+            'format' => 'pdf',
+            'created_at' => now(),
+        ]);
+
+        activity()->causedBy($request->user())->event('report_generated')
+            ->log("Generated PDF report {$report->title}");
+
+        return back()->with('testResult', [
+            'type' => 'report_pdf',
+            'download_url' => route('cti.report-download', $report),
+        ]);
+    }
+
+    public function downloadReport(CtiReport $report)
+    {
+        return Storage::download($report->file_path, Str::slug($report->title).'.pdf');
+    }
+
+    public function storeNote(Request $request, CtiRecord $record)
+    {
+        $data = $request->validate([
+            'body' => ['required', 'string', 'max:10000'],
+            'applicability' => ['required', Rule::in(CtiNote::APPLICABILITY)],
+        ]);
+
+        CtiNote::create([
+            'cti_record_id' => $record->id,
+            'user_id' => $request->user()->id,
+            ...$data,
+        ]);
+
+        return back()->with('success', 'Analyst note added.');
+    }
+
+    public function reverifyAll(CtiRecord $record, IocCheckService $iocCheck)
+    {
+        $record->iocs->each(fn (CtiIoc $ioc) => $iocCheck->verifyIoc($ioc));
+
+        return back()->with('success', 'Re-verification complete for '.$record->iocs->count().' IOCs.');
+    }
+
+    public function reverifyOne(CtiIoc $ioc, IocCheckService $iocCheck)
+    {
+        $iocCheck->verifyIoc($ioc);
+
+        return back()->with('success', 'IOC re-checked: '.$ioc->verdict);
+    }
+
+    // ===== helpers =====
+
+    private function recordsForExport(Request $request): Collection
+    {
+        $data = $request->validate([
+            'ids' => ['nullable', 'array'],
+            'ids.*' => ['integer', 'exists:cti_records,id'],
+        ]);
+
+        return CtiRecord::query()
+            ->with('iocs')
+            ->when($data['ids'] ?? null, fn ($q, $ids) => $q->whereIn('id', $ids))
+            ->orderBy('cti_id')
+            ->get();
+    }
+
+    private function validateReportRequest(Request $request): array
+    {
+        return $request->validate([
+            'cti_ids' => ['required', 'array', 'min:1'],
+            'cti_ids.*' => ['integer', 'exists:cti_records,id'],
+            'template_id' => ['nullable', 'exists:report_templates,id'],
+        ]) + ['template_id' => $request->input('template_id') ?: ReportTemplate::where('is_default', true)->value('id')];
+    }
+
+    private function renderReports(Collection $records, array $data, CtiExportService $export, ReportRenderer $renderer): string
+    {
+        $template = ReportTemplate::find($data['template_id']);
+        $logoUrl = ($template && $template->logo_path) ? Storage::url($template->logo_path) : null;
+
+        $sections = $records->map(
+            fn (CtiRecord $record) => $renderer->render(
+                $template->html_content,
+                $export->toRendererData($record->load('iocs')),
+                $template->css_styles,
+                $logoUrl,
+                $template->watermark_text
+            )
+        );
+
+        return $sections->implode('<div style="page-break-after: always;"></div>');
+    }
+
+    private function validated(Request $request): array
+    {
+        return $request->validate([
+            'subject' => ['required', 'string', 'max:1000'],
+            'type' => ['required', Rule::in(['Vul', 'Mal'])],
+            'severity' => ['required', Rule::in(CtiRecord::SEVERITIES)],
+            'tlp' => ['required', 'string', 'max:20'],
+            'workflow_status' => ['required', Rule::in(CtiRecord::WORKFLOW_STATUSES)],
+            'confidence_score' => ['required', 'integer', 'min:0', 'max:100'],
+            'summary' => ['nullable', 'string', 'max:20000'],
+            'technical_analysis' => ['nullable', 'string', 'max:50000'],
+            'mitigation' => ['nullable', 'string', 'max:20000'],
+            'exploit_status' => ['nullable', Rule::in(CtiRecord::EXPLOIT_STATUSES)],
+            'cves' => ['nullable', 'array'],
+            'cves.*' => ['string', 'regex:/^CVE-\d{4}-\d{4,}$/i'],
+            'impact_hardware' => ['nullable', 'array'],
+            'impact_software' => ['nullable', 'array'],
+            'threat_actors' => ['nullable', 'array'],
+            'target_objects' => ['nullable', 'array'],
+            'iocs_add' => ['nullable', 'array'],
+            'iocs_add.*.type' => ['required_with:iocs_add', Rule::in(CtiIoc::TYPES)],
+            'iocs_add.*.value' => ['required_with:iocs_add', 'string', 'max:512'],
+        ]);
+    }
+}

@@ -59,6 +59,16 @@ class CtiRecord extends Model
         return $this->hasMany(CtiRevision::class);
     }
 
+    public function notes(): HasMany
+    {
+        return $this->hasMany(CtiNote::class);
+    }
+
+    public function reports(): HasMany
+    {
+        return $this->hasMany(CtiReport::class);
+    }
+
     /** Append a source entry (deduplicated by URL) — spec Section 8 merging. */
     public function addSource(array $source): bool
     {

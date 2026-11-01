@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AiIntegrationController;
 use App\Http\Controllers\AuditLogController;
+use App\Http\Controllers\CtiRepositoryController;
 use App\Http\Controllers\ConfigurationController;
 use App\Http\Controllers\FeedController;
 use App\Http\Controllers\IocVerifierController;
@@ -64,8 +65,28 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
     Route::get('/query-hub', [QueryHubController::class, 'index'])->name('queryhub.index');
     Route::post('/query-hub', [QueryHubController::class, 'store'])->name('queryhub.store');
     Route::post('/query-hub/{run}/cancel', [QueryHubController::class, 'cancel'])->name('queryhub.cancel');
-    Route::get('/cti-repository', fn () => Inertia::render('Placeholder', ['title' => 'CTI Repository', 'phase' => 'Phase 4']))
-        ->name('cti.index');
+    // ===== CTI Repository (Phase 4, spec Sections 6–8) =====
+    Route::get('/cti-repository', [CtiRepositoryController::class, 'index'])->name('cti.index');
+    Route::get('/cti-repository/{record}', [CtiRepositoryController::class, 'show'])->name('cti.show');
+    Route::get('/cti-repository/{record}/edit', [CtiRepositoryController::class, 'edit'])->name('cti.edit')->middleware('permission:cti.edit');
+    Route::patch('/cti-repository/{record}', [CtiRepositoryController::class, 'update'])->name('cti.update')->middleware('permission:cti.edit');
+    Route::delete('/cti-repository/{record}', [CtiRepositoryController::class, 'destroy'])->name('cti.destroy')->middleware('permission:cti.delete');
+
+    Route::middleware('permission:cti.bulk')->group(function () {
+        Route::post('/cti-repository/bulk-status', [CtiRepositoryController::class, 'bulkStatus'])->name('cti.bulk-status');
+        Route::post('/cti-repository/bulk-destroy', [CtiRepositoryController::class, 'bulkDestroy'])->name('cti.bulk-destroy');
+        // GET so the browser handles the file download natively (ids via query).
+        Route::get('/cti-repository/export/csv', [CtiRepositoryController::class, 'exportCsv'])->name('cti.export-csv');
+        Route::get('/cti-repository/export/stix', [CtiRepositoryController::class, 'exportStix'])->name('cti.export-stix');
+    });
+
+    Route::post('/cti-repository/report/preview', [CtiRepositoryController::class, 'preview'])->name('cti.report-preview')->middleware('permission:report.generate');
+    Route::post('/cti-repository/report/pdf', [CtiRepositoryController::class, 'generatePdf'])->name('cti.report-pdf')->middleware('permission:report.generate');
+    Route::get('/cti-reports/{report}/download', [CtiRepositoryController::class, 'downloadReport'])->name('cti.report-download');
+    Route::post('/cti-repository/{record}/quick-report', [CtiRepositoryController::class, 'quickReport'])->name('cti.quick-report')->middleware('permission:report.generate');
+    Route::post('/cti-repository/{record}/reverify-iocs', [CtiRepositoryController::class, 'reverifyAll'])->name('cti.reverify');
+    Route::post('/cti-repository/ioc/{ioc}/reverify', [CtiRepositoryController::class, 'reverifyOne'])->name('cti.ioc-reverify');
+    Route::post('/cti-repository/{record}/notes', [CtiRepositoryController::class, 'storeNote'])->name('cti.notes.store')->middleware('permission:cti.comment');
     // ===== Configuration Center (Phase 2, spec Section 5) =====
     Route::get('/configuration', [ConfigurationController::class, 'index'])
         ->name('config.index')
