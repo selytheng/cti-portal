@@ -14,17 +14,12 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\QueryHubController;
 use App\Http\Controllers\ReportTemplateController;
 use App\Http\Controllers\UserManagementController;
-use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
 
+// Root → dashboard. Guests are bounced to /login by the dashboard's
+// auth middleware, so the Welcome page is no longer needed.
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
+    return redirect()->route('dashboard');
 });
 
 Route::get('/dashboard', [DashboardController::class, 'index'])
