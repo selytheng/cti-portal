@@ -4,6 +4,7 @@ use App\Http\Controllers\AiIntegrationController;
 use App\Http\Controllers\AuditLogController;
 use App\Http\Controllers\CtiRepositoryController;
 use App\Http\Controllers\ConfigurationController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FeedController;
 use App\Http\Controllers\IocVerifierController;
 use App\Http\Controllers\KeywordController;
@@ -26,9 +27,8 @@ Route::get('/', function () {
     ]);
 });
 
-Route::get('/dashboard', function () {
-    return Inertia::render('Dashboard');
-})->middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])->name('dashboard');
+Route::get('/dashboard', [DashboardController::class, 'index'])
+    ->middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])->name('dashboard');
 
 // Forced password change — reachable while must_change_password is ***.
 Route::middleware(['auth', 'force-password-change'])->group(function () {
@@ -87,6 +87,13 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
     Route::post('/cti-repository/{record}/reverify-iocs', [CtiRepositoryController::class, 'reverifyAll'])->name('cti.reverify');
     Route::post('/cti-repository/ioc/{ioc}/reverify', [CtiRepositoryController::class, 'reverifyOne'])->name('cti.ioc-reverify');
     Route::post('/cti-repository/{record}/notes', [CtiRepositoryController::class, 'storeNote'])->name('cti.notes.store')->middleware('permission:cti.comment');
+
+    // Contributing sources CRUD (spec Section 6 sources JSONB).
+    Route::middleware('permission:cti.edit')->group(function () {
+        Route::post('/cti-repository/{record}/sources', [CtiRepositoryController::class, 'addSource'])->name('cti.sources.store');
+        Route::patch('/cti-repository/{record}/sources', [CtiRepositoryController::class, 'updateSource'])->name('cti.sources.update');
+        Route::delete('/cti-repository/{record}/sources', [CtiRepositoryController::class, 'deleteSource'])->name('cti.sources.destroy');
+    });
     // ===== Configuration Center (Phase 2, spec Section 5) =====
     Route::get('/configuration', [ConfigurationController::class, 'index'])
         ->name('config.index')

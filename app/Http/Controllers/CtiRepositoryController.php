@@ -318,6 +318,107 @@ class CtiRepositoryController extends Controller
         return back()->with('success', 'IOC re-checked: '.$ioc->verdict);
     }
 
+    // ===== Contributing sources management (spec Section 6 sources JSONB) =====
+
+    public function addSource(Request $request, CtiRecord $record)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'url' => ['required', 'url', 'max:2048'],
+            'author' => ['nullable', 'string', 'max:255'],
+            'published_at' => ['nullable', 'date'],
+        ]);
+
+        if ($record->hasSourceUrl($data['url'])) {
+            return back()->withErrors(['url' => 'This source URL is already attached to this CTI.']);
+        }
+
+        $source = [
+            'name' => $data['name'],
+            'url' => $data['url'],
+            'author' => $data['author'] ?? null,
+            'published_at' => $data['published_at'] ?? null,
+        ];
+
+        $record->addSource($source);
+
+        $this->touchRevision($request, $record, ['sources'], ['added' => $source], "Added source {$data['url']}");
+
+        return back()->with('success', 'Source added.');
+    }
+
+    public function updateSource(Request $request, CtiRecord $record)
+    {
+        $data = $request->validate([
+            'original_url' => ['required', 'string'],
+            'name' => ['required', 'string', 'max:255'],
+            'url' => ['required', 'url', 'max:2048'],
+            'author' => ['nullable', 'string', 'max:255'],
+            'published_at' => ['nullable', 'date'],
+        ]);
+
+        $sources = $record->sources ?? [];
+        $index = collect($sources)->search(fn (array $s) => ($s['url'] ?? null) === $data['original_url']);
+
+        abort_if($index === false, 404, 'Source not found.');
+
+        if ($data['url'] !== $data['original_url'] && $record->hasSourceUrl($data['url'])) {
+            return back()->withErrors(['url' => 'Another source with this URL already exists on this CTI.']);
+        }
+
+        $previous = $sources[$index];
+        $sources[$index] = array_merge($previous, [
+            'name' => $data['name'],
+            'url' => $data['url'],
+            'author' => $data['author'] ?? null,
+            'published_at' => $data['published_at'] ?? ($previous['published_at'] ?? null),
+        ]);
+
+        $record->sources = $sources;
+
+        $this->touchRevision($request, $record, ['sources'], ['before' => $previous, 'after' => $sources[$index]], "Updated source {$data['url']}");
+
+        return back()->with('success', 'Source updated.');
+    }
+
+    public function deleteSource(Request $request, CtiRecord $record)
+    {
+        $data = $request->validate(['url' => ['required', 'string']]);
+
+        $sources = $record->sources ?? [];
+        $index = collect($sources)->search(fn (array $s) => ($s['url'] ?? null) === $data['url']);
+
+        abort_if($index === false, 404, 'Source not found.');
+
+        $removed = $sources[$index];
+        $record->sources = array_values(collect($sources)->forget($index)->all());
+
+        $this->touchRevision($request, $record, ['sources'], ['removed' => $removed], "Removed source {$data['url']}");
+
+        return back()->with('success', 'Source removed.');
+    }
+
+    /**
+     * Analyst source edits follow the same revision discipline as pipeline
+     * merges: bump modified_at/revision_count, write a cti_revisions diff row.
+     */
+    private function touchRevision(Request $request, CtiRecord $record, array $fieldsUpdated, array $details, string $description): void
+    {
+        $record->modified_at = now();
+        $record->revision_count += 1;
+        $record->save();
+
+        CtiRevision::create([
+            'cti_record_id' => $record->id,
+            'updated_by_user_id' => $request->user()->id,
+            'fields_updated' => $fieldsUpdated,
+            'previous_values' => $details,
+            'created_at' => now(),
+        ]);
+
+        activity()->causedBy($request->user())->performedOn($record)->event('updated')->log($description);
+    }
+
     // ===== helpers =====
 
     private function recordsForExport(Request $request): Collection

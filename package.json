@@ -23,8 +23,10 @@
         "@laravel/multiplex": "^0.4.1"
     },
     "dependencies": {
+        "apexcharts": "^8.7.0",
         "laravel-echo": "^2.6.3",
         "pusher-js": "^8.6.0",
-        "qrcode": "^1.5.4"
+        "qrcode": "^1.5.4",
+        "vue3-apexcharts": "^1.11.3"
     }
 }

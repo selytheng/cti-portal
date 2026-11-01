@@ -80,6 +80,46 @@ function destroyRecord() {
     }
 }
 
+// ===== Contributing sources management (add/edit/remove) =====
+const editingSourceUrl = ref(null);
+const showAddSource = ref(false);
+
+const addSourceForm = ref({ name: '', url: '', author: '', published_at: '' });
+const editSourceForm = ref({ original_url: '', name: '', url: '', author: '', published_at: '' });
+
+function startEditSource(s) {
+    editingSourceUrl.value = s.url;
+    editSourceForm.value = {
+        original_url: s.url,
+        name: s.name ?? '',
+        url: s.url,
+        author: s.author ?? '',
+        published_at: s.published_at ? String(s.published_at).slice(0, 10) : '',
+    };
+}
+
+function addSource() {
+    router.post(route('cti.sources.store', record.id), addSourceForm.value, {
+        preserveScroll: true,
+        onSuccess: () => {
+            addSourceForm.value = { name: '', url: '', author: '', published_at: '' };
+            showAddSource.value = false;
+        },
+    });
+}
+
+function updateSource() {
+    router.patch(route('cti.sources.update', record.id), editSourceForm.value, {
+        preserveScroll: true,
+        onSuccess: () => (editingSourceUrl.value = null),
+    });
+}
+
+function removeSource(s) {
+    if (!confirm(`Remove source "${s.name}"?`)) return;
+    router.delete(route('cti.sources.destroy', record.id), { data: { url: s.url }, preserveScroll: true });
+}
+
 // Analyst notes
 const noteForm = useForm({ body: '', applicability: 'Investigating' });
 
@@ -205,13 +245,56 @@ const revisedAgo = computed(() => {
                         </div>
                     </div>
                     <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                        <h3 class="mb-2 font-semibold text-gray-800 dark:text-gray-200">Contributing Sources</h3>
-                        <ul class="space-y-1 text-sm">
-                            <li v-for="(s, i) in record.sources ?? []" :key="i" class="text-gray-700 dark:text-gray-300">
-                                <strong>{{ s.name }}</strong> —
-                                <a :href="s.url" target="_blank" rel="noopener" class="text-indigo-600 hover:underline dark:text-indigo-400">{{ s.url }}</a>
-                                <span class="ms-1 text-xs text-gray-400">{{ fmt(s.published_at) }}</span>
+                        <div class="mb-3 flex items-center justify-between">
+                            <h3 class="font-semibold text-gray-800 dark:text-gray-200">Contributing Sources</h3>
+                            <SecondaryButton type="button" @click="showAddSource = !showAddSource">{{ showAddSource ? 'Close' : '+ Add Source' }}</SecondaryButton>
+                        </div>
+
+                        <!-- Add source -->
+                        <form
+                            v-if="showAddSource"
+                            @submit.prevent="addSource"
+                            class="mb-4 grid gap-2 rounded-md border border-indigo-500/30 bg-indigo-500/5 p-3 sm:grid-cols-[1fr_1.5fr_1fr_auto]"
+                        >
+                            <TextInput v-model="addSourceForm.name" type="text" placeholder="Source name (e.g. BleepingComputer)" required />
+                            <TextInput v-model="addSourceForm.url" type="url" placeholder="https://…" required />
+                            <TextInput v-model="addSourceForm.author" type="text" placeholder="Author (optional)" />
+                            <PrimaryButton type="submit">Add Source</PrimaryButton>
+                        </form>
+
+                        <ul class="space-y-2 text-sm">
+                            <li v-for="(s, i) in record.sources ?? []" :key="s.url ?? i" class="rounded-md border border-gray-200 p-3 dark:border-gray-700">
+                                <template v-if="editingSourceUrl === s.url">
+                                    <form @submit.prevent="updateSource" class="grid gap-2 sm:grid-cols-[1fr_1.5fr_1fr_1fr_auto]">
+                                        <TextInput v-model="editSourceForm.name" type="text" required />
+                                        <TextInput v-model="editSourceForm.url" type="url" required />
+                                        <TextInput v-model="editSourceForm.author" type="text" placeholder="Author (optional)" />
+                                        <TextInput v-model="editSourceForm.published_at" type="date" />
+                                        <div class="flex gap-1">
+                                            <PrimaryButton type="submit">Save</PrimaryButton>
+                                            <SecondaryButton type="button" @click="editingSourceUrl = null">Cancel</SecondaryButton>
+                                        </div>
+                                    </form>
+                                </template>
+                                <template v-else>
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <strong class="text-gray-800 dark:text-gray-200">{{ s.name }}</strong>
+                                            <span v-if="s.author" class="ms-1 text-xs text-gray-400">by {{ s.author }}</span>
+                                            <span v-if="s.feed_id" class="ms-1 rounded bg-gray-100 px-1 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">auto-ingested</span>
+                                            <div>
+                                                <a :href="s.url" target="_blank" rel="noopener" class="text-indigo-600 hover:underline dark:text-indigo-400">{{ s.url }}</a>
+                                                <span class="ms-1 text-xs text-gray-400">{{ fmt(s.published_at) }}</span>
+                                            </div>
+                                        </div>
+                                        <div class="flex shrink-0 gap-2 text-xs">
+                                            <button type="button" @click="startEditSource(s)" class="text-indigo-600 hover:underline dark:text-indigo-400">Edit</button>
+                                            <button type="button" @click="removeSource(s)" class="text-red-600 hover:underline dark:text-red-400">Remove</button>
+                                        </div>
+                                    </div>
+                                </template>
                             </li>
+                            <li v-if="(record.sources ?? []).length === 0" class="text-gray-500 dark:text-gray-400">No sources recorded.</li>
                         </ul>
                     </div>
                 </div>
