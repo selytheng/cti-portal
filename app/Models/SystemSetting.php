@@ -18,12 +18,16 @@ class SystemSetting extends Model
         ];
     }
 
-    /** Read a setting with a default; values are stored as JSON arrays. */
+    /** Read a setting with a default; scalar values are unwrapped. */
     public static function get(string $key, mixed $default = null): mixed
     {
-        $setting = static::query()->where('key', $key)->first();
+        $value = static::query()->where('key', $key)->first()?->value;
 
-        return $setting?->value ?? $default;
+        if ($value === null) {
+            return $default;
+        }
+
+        return (is_array($value) && array_keys($value) === ['value']) ? $value['value'] : $value;
     }
 
     /** Write a setting (values are wrapped in arrays for the JSONB cast). */

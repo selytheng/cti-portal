@@ -9,6 +9,7 @@ use App\Http\Controllers\KeywordController;
 use App\Http\Controllers\MfaController;
 use App\Http\Controllers\PasswordChangeController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\QueryHubController;
 use App\Http\Controllers\ReportTemplateController;
 use App\Http\Controllers\UserManagementController;
 use Illuminate\Foundation\Application;
@@ -59,9 +60,10 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
         ->name('audit.index')
         ->middleware('permission:audit.view');
 
-    // Sidebar structure per spec Section 1.2 — modules land in Phases 2–4.
-    Route::get('/query-hub', fn () => Inertia::render('Placeholder', ['title' => 'Query Hub', 'phase' => 'Phase 3']))
-        ->name('queryhub.index');
+    // ===== Query Hub (Phase 3, spec Section 4) =====
+    Route::get('/query-hub', [QueryHubController::class, 'index'])->name('queryhub.index');
+    Route::post('/query-hub', [QueryHubController::class, 'store'])->name('queryhub.store');
+    Route::post('/query-hub/{run}/cancel', [QueryHubController::class, 'cancel'])->name('queryhub.cancel');
     Route::get('/cti-repository', fn () => Inertia::render('Placeholder', ['title' => 'CTI Repository', 'phase' => 'Phase 4']))
         ->name('cti.index');
     // ===== Configuration Center (Phase 2, spec Section 5) =====
