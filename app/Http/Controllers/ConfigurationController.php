@@ -9,6 +9,7 @@ use App\Models\ReportTemplate;
 use App\Models\RssFeed;
 use App\Models\SystemSetting;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 
 class ConfigurationController extends Controller
@@ -60,5 +61,43 @@ class ConfigurationController extends Controller
             'templates' => ReportTemplate::query()->with('author:id,name')->get(),
             'variables' => ReportTemplate::VARIABLES,
         ]);
+    }
+
+    // ===== Application branding (sidebar / login logo, spec Section 5 spirit) =====
+
+    public function uploadAppLogo(Request $request)
+    {
+        $data = $request->validate([
+            'logo' => ['required', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'],
+        ]);
+
+        $path = $data['logo']->store('branding', 'public');
+
+        $previous = SystemSetting::get('app_logo_path');
+        if ($previous && Storage::disk('public')->exists($previous)) {
+            Storage::disk('public')->delete($previous);
+        }
+
+        SystemSetting::put('app_logo_path', $path);
+
+        activity()->causedBy($request->user())->event('updated')
+            ->log('Updated application logo');
+
+        return back()->with('success', 'Application logo updated — it now appears across the portal.');
+    }
+
+    public function resetAppLogo(Request $request)
+    {
+        $previous = SystemSetting::get('app_logo_path');
+        if ($previous && Storage::disk('public')->exists($previous)) {
+            Storage::disk('public')->delete($previous);
+        }
+
+        SystemSetting::put('app_logo_path', null);
+
+        activity()->causedBy($request->user())->event('updated')
+            ->log('Reset application logo to default');
+
+        return back()->with('success', 'Application logo reset to the default mark.');
     }
 }

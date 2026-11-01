@@ -22,6 +22,14 @@ class ReportRenderer
         $data['watermark'] = $watermark ?: ($data['watermark'] ?? '');
         $data['generated_at'] = $data['generated_at'] ?? now()->toDayDateTimeString();
 
+        // Spec 5.5 chips use {{cves_table}}/{{iocs_table}} while callers pass
+        // the lists under 'cves'/'iocs' — expose both names.
+        foreach (['cves', 'iocs'] as $listKey) {
+            if (isset($data[$listKey]) && ! isset($data[$listKey.'_table'])) {
+                $data[$listKey.'_table'] = $data[$listKey];
+            }
+        }
+
         foreach ($data as $key => $value) {
             $html = str_replace('{{'.$key.'}}', $this->stringify($key, $value), $html);
         }
@@ -74,11 +82,18 @@ class ReportRenderer
     private function stringify(string $key, mixed $value): string
     {
         if (is_array($value)) {
-            if (str_ends_with($key, '_table')) {
+            // Lists of structs (CVEs, IOCs…) render as tables regardless of
+            // the key name — this was the "Array to string conversion" crash.
+            $containsArrays = collect($value)->contains(fn ($v) => is_array($v));
+
+            if (str_ends_with($key, '_table') || $containsArrays) {
                 return $this->table($value);
             }
 
-            return implode(', ', array_map(strval(...), $value));
+            return implode(', ', array_map(
+                fn ($v) => is_array($v) ? $this->table([$v]) : strval($v),
+                $value
+            ));
         }
 
         return Str::of((string) $value)->replace(['<', '>'], ['&lt;', '&gt;'])->toString();

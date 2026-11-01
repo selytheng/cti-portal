@@ -3,6 +3,7 @@ import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Head } from '@inertiajs/vue3';
 import { ref } from 'vue';
 import AiTab from '@/Components/Configuration/AiTab.vue';
+import BrandingTab from '@/Components/Configuration/BrandingTab.vue';
 import FeedsTab from '@/Components/Configuration/FeedsTab.vue';
 import IocTab from '@/Components/Configuration/IocTab.vue';
 import KeywordsTab from '@/Components/Configuration/KeywordsTab.vue';
@@ -26,6 +27,7 @@ const tabs = [
     { id: 'ioc', label: 'IOC Verifiers' },
     { id: 'keywords', label: 'Keywords' },
     { id: 'templates', label: 'Report Studio' },
+    { id: 'branding', label: 'Branding' },
 ];
 </script>
 
@@ -59,6 +61,7 @@ const tabs = [
                 <IocTab v-else-if="tab === 'ioc'" :verifiers="verifiers" />
                 <KeywordsTab v-else-if="tab === 'keywords'" :rules="keywordRules" :settings="settings" />
                 <TemplatesTab v-else-if="tab === 'templates'" :templates="templates" :variables="variables" />
+                <BrandingTab v-else-if="tab === 'branding'" />
             </div>
         </div>
     </AuthenticatedLayout>

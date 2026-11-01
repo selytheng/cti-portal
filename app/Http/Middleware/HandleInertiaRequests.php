@@ -2,8 +2,10 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\SystemSetting;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Middleware;
 
 class HandleInertiaRequests extends Middleware
@@ -54,6 +56,7 @@ class HandleInertiaRequests extends Middleware
                 'testResult' => $request->session()->get('testResult'),
                 'generatedPassword' => $request->session()->get('generatedPassword'),
             ],
+            'appLogoUrl' => ($path = SystemSetting::get('app_logo_path')) ? Storage::url($path) : null,
         ];
     }
 }

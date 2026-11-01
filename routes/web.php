@@ -116,6 +116,10 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
         Route::post('/configuration/templates/{template}/default', [ReportTemplateController::class, 'setDefault'])->name('config.templates.default');
         Route::post('/configuration/templates/{template}/preview', [ReportTemplateController::class, 'preview'])->name('config.templates.preview');
         Route::post('/configuration/templates/logo', [ReportTemplateController::class, 'uploadLogo'])->name('config.templates.logo');
+
+        // Application branding (sidebar / login logo).
+        Route::post('/configuration/branding/logo', [ConfigurationController::class, 'uploadAppLogo'])->name('config.branding.logo');
+        Route::post('/configuration/branding/reset', [ConfigurationController::class, 'resetAppLogo'])->name('config.branding.reset');
     });
 
     // API key management is superadmin-only (spec Section 2 RBAC).
