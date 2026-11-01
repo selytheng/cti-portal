@@ -45,6 +45,14 @@ class HandleInertiaRequests extends Middleware
                 'manageUsers' => $user?->can('viewAny', User::class) ?? false,
                 'viewAudit' => $user?->can('audit.view') ?? false,
                 'configManage' => $user?->can('config.feeds.manage') ?? false,
+                'manageApiKeys' => $user?->can('config.apikeys.manage') ?? false,
+            ],
+            'flash' => [
+                'success' => $request->session()->get('success'),
+                'warning' => $request->session()->get('warning'),
+                'error' => $request->session()->get('error'),
+                'testResult' => $request->session()->get('testResult'),
+                'generatedPassword' => $request->session()->get('generatedPassword'),
             ],
         ];
     }

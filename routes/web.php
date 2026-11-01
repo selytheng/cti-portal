@@ -1,9 +1,15 @@
 <?php
 
+use App\Http\Controllers\AiIntegrationController;
 use App\Http\Controllers\AuditLogController;
+use App\Http\Controllers\ConfigurationController;
+use App\Http\Controllers\FeedController;
+use App\Http\Controllers\IocVerifierController;
+use App\Http\Controllers\KeywordController;
 use App\Http\Controllers\MfaController;
 use App\Http\Controllers\PasswordChangeController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\ReportTemplateController;
 use App\Http\Controllers\UserManagementController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -58,9 +64,40 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
         ->name('queryhub.index');
     Route::get('/cti-repository', fn () => Inertia::render('Placeholder', ['title' => 'CTI Repository', 'phase' => 'Phase 4']))
         ->name('cti.index');
-    Route::get('/configuration', fn () => Inertia::render('Placeholder', ['title' => 'Configuration Center', 'phase' => 'Phase 2']))
+    // ===== Configuration Center (Phase 2, spec Section 5) =====
+    Route::get('/configuration', [ConfigurationController::class, 'index'])
         ->name('config.index')
         ->middleware('permission:config.feeds.manage');
+
+    Route::middleware('permission:config.feeds.manage')->group(function () {
+        Route::post('/configuration/feeds', [FeedController::class, 'store'])->name('config.feeds.store');
+        Route::patch('/configuration/feeds/{feed}', [FeedController::class, 'update'])->name('config.feeds.update');
+        Route::delete('/configuration/feeds/{feed}', [FeedController::class, 'destroy'])->name('config.feeds.destroy');
+        Route::post('/configuration/feeds/{feed}/test', [FeedController::class, 'test'])->name('config.feeds.test');
+
+        Route::post('/configuration/keywords', [KeywordController::class, 'store'])->name('config.keywords.store');
+        Route::patch('/configuration/keywords/{keyword}', [KeywordController::class, 'update'])->name('config.keywords.update');
+        Route::delete('/configuration/keywords/{keyword}', [KeywordController::class, 'destroy'])->name('config.keywords.destroy');
+        Route::patch('/configuration/keyword-settings', [KeywordController::class, 'updateSettings'])->name('config.keywords.settings');
+
+        Route::post('/configuration/templates', [ReportTemplateController::class, 'store'])->name('config.templates.store');
+        Route::patch('/configuration/templates/{template}', [ReportTemplateController::class, 'update'])->name('config.templates.update');
+        Route::delete('/configuration/templates/{template}', [ReportTemplateController::class, 'destroy'])->name('config.templates.destroy');
+        Route::post('/configuration/templates/{template}/default', [ReportTemplateController::class, 'setDefault'])->name('config.templates.default');
+        Route::post('/configuration/templates/{template}/preview', [ReportTemplateController::class, 'preview'])->name('config.templates.preview');
+        Route::post('/configuration/templates/logo', [ReportTemplateController::class, 'uploadLogo'])->name('config.templates.logo');
+    });
+
+    // API key management is superadmin-only (spec Section 2 RBAC).
+    Route::middleware('permission:config.apikeys.manage')->group(function () {
+        Route::post('/configuration/ai', [AiIntegrationController::class, 'store'])->name('config.ai.store');
+        Route::patch('/configuration/ai/{aiIntegration}', [AiIntegrationController::class, 'update'])->name('config.ai.update');
+        Route::delete('/configuration/ai/{aiIntegration}', [AiIntegrationController::class, 'destroy'])->name('config.ai.destroy');
+        Route::post('/configuration/ai/{aiIntegration}/test', [AiIntegrationController::class, 'test'])->name('config.ai.test');
+
+        Route::patch('/configuration/ioc/{iocVerifier}', [IocVerifierController::class, 'update'])->name('config.ioc.update');
+        Route::post('/configuration/ioc/{iocVerifier}/test', [IocVerifierController::class, 'test'])->name('config.ioc.test');
+    });
 });
 
 require __DIR__.'/auth.php';
