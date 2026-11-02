@@ -62,18 +62,39 @@ class CveVerifierService
         return ['ok' => true, 'detail' => "NVD OK ($keyNote)."];
     }
 
-    /** CISA KEV CVE IDs, cached for 6 hours (public catalog, no key). */
+    /**
+     * CISA KEV CVE IDs, cached for 6 hours (public catalog, no key).
+     *
+     * Stored as a plain ARRAY, not a Collection: objects in the cache can
+     * come back as __PHP_Incomplete_Class (poisoned/stale serialization),
+     * which crashed the strict Collection return type. Arrays are safe.
+     */
     public function kevIds(): Collection
     {
-        return Cache::remember('cisa_kev_ids', now()->addHours(6), function () {
-            try {
-                $response = Http::timeout(30)->get(self::KEV_URL);
+        $cached = Cache::get('cisa_kev_ids');
 
-                return collect($response->json('vulnerabilities') ?? [])->pluck('cveID')->filter()->unique()->values();
-            } catch (Throwable) {
-                return collect();
-            }
-        });
+        if (is_array($cached)) {
+            return collect($cached);
+        }
+
+        // Poisoned or absent — drop it and refetch fresh.
+        Cache::forget('cisa_kev_ids');
+
+        try {
+            $response = Http::timeout(30)->get(self::KEV_URL);
+            $ids = collect($response->json('vulnerabilities') ?? [])
+                ->pluck('cveID')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            Cache::put('cisa_kev_ids', $ids, now()->addHours(6));
+
+            return collect($ids);
+        } catch (Throwable) {
+            return collect();
+        }
     }
 
     /** FIRST EPSS score (public, no key). */

@@ -5,9 +5,11 @@ namespace App\Jobs;
 use App\Events\QueryProgressEvent;
 use App\Models\CtiIoc;
 use App\Models\CtiRecord;
+use App\Models\CveVerifier;
 use App\Models\QueryRun;
 use App\Models\RssFeed;
 use App\Services\CtiExtractor;
+use App\Services\CveVerifierService;
 use App\Services\FeedParser;
 use App\Services\IocCheckService;
 use App\Services\KeywordMatcher;
@@ -41,7 +43,7 @@ class RunIntelligenceQueryJob implements ShouldQueue
     {
     }
 
-    public function handle(FeedParser $parser, IocCheckService $iocCheck, StoryCorrelator $correlator): void
+    public function handle(FeedParser $parser, IocCheckService $iocCheck, StoryCorrelator $correlator, CveVerifierService $cveService): void
     {
         $run = $this->run->refresh();
 
@@ -220,6 +222,22 @@ class RunIntelligenceQueryJob implements ShouldQueue
                     $q->whereNull('last_verified_at')->orWhere('verdict', 'Unknown');
                 })
                 ->each(fn (CtiIoc $ioc) => $iocCheck->verifyIoc($ioc));
+        }
+
+        // Stage: CVE verification against trust sources (NVD/KEV/EPSS) —
+        // mirrors how IOCs are verified in-pipeline.
+        $run->update(['current_stage' => 'Verifying CVEs', 'progress_percent' => 92]);
+        broadcast(new QueryProgressEvent($run->fresh()));
+
+        if ($targetIds !== []) {
+            $verifier = CveVerifier::query()->where('service', 'nvd')->first();
+
+            if ($verifier) {
+                CtiRecord::query()
+                    ->whereIn('id', $targetIds)
+                    ->whereRaw("jsonb_array_length(coalesce(cves, '[]'::jsonb)) > 0")
+                    ->each(fn (CtiRecord $record) => $cveService->verifyRecord($record, $verifier));
+            }
         }
 
         $run->update([
