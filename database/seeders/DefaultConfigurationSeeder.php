@@ -53,6 +53,14 @@ class DefaultConfigurationSeeder extends Seeder
             'is_active' => false,
         ]);
 
+        // CVE verifier (NVD) — inactive until the API key is entered (spec 6).
+        \App\Models\CveVerifier::updateOrCreate(['service' => 'nvd'], [
+            'base_url' => 'https://services.nvd.nist.gov',
+            'request_interval_seconds' => 2,
+            'auto_verify' => true,
+            'is_active' => false,
+        ]);
+
         // Keyword engine master toggles + default match mode (spec 5.4).
         SystemSetting::put('focus_keywords_enabled', true);
         SystemSetting::put('exception_keywords_enabled', true);

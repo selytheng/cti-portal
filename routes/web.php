@@ -89,6 +89,10 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
         Route::patch('/cti-repository/{record}/sources', [CtiRepositoryController::class, 'updateSource'])->name('cti.sources.update');
         Route::delete('/cti-repository/{record}/sources', [CtiRepositoryController::class, 'deleteSource'])->name('cti.sources.destroy');
     });
+
+    // CVE trust-source verification (NVD / CISA KEV / EPSS).
+    Route::post('/cti-repository/{record}/verify-cves', [CtiRepositoryController::class, 'verifyCves'])->name('cti.verify-cves')->middleware('permission:cti.edit');
+    Route::post('/cti-repository/verify-cves-all', [CtiRepositoryController::class, 'verifyAllCves'])->name('cti.verify-cves-all')->middleware('permission:cti.bulk');
     // ===== Configuration Center (Phase 2, spec Section 5) =====
     Route::get('/configuration', [ConfigurationController::class, 'index'])
         ->name('config.index')
@@ -126,6 +130,10 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
 
         Route::patch('/configuration/ioc/{iocVerifier}', [IocVerifierController::class, 'update'])->name('config.ioc.update');
         Route::post('/configuration/ioc/{iocVerifier}/test', [IocVerifierController::class, 'test'])->name('config.ioc.test');
+
+        // CVE trust-source verification (NVD API key, spec Section 6).
+        Route::patch('/configuration/cve/{cveVerifier}', [ConfigurationController::class, 'updateCveVerifier'])->name('config.cve.update');
+        Route::post('/configuration/cve/{cveVerifier}/test', [ConfigurationController::class, 'testCveVerifier'])->name('config.cve.test');
     });
 });
 

@@ -4,6 +4,7 @@ import { Head } from '@inertiajs/vue3';
 import { ref } from 'vue';
 import AiTab from '@/Components/Configuration/AiTab.vue';
 import BrandingTab from '@/Components/Configuration/BrandingTab.vue';
+import CveTab from '@/Components/Configuration/CveTab.vue';
 import FeedsTab from '@/Components/Configuration/FeedsTab.vue';
 import IocTab from '@/Components/Configuration/IocTab.vue';
 import KeywordsTab from '@/Components/Configuration/KeywordsTab.vue';
@@ -13,6 +14,7 @@ const props = defineProps({
     feeds: Object,
     aiIntegrations: Array,
     verifiers: Array,
+    cveVerifier: Object,
     keywordRules: Object,
     settings: Object,
     templates: Object,
@@ -25,6 +27,7 @@ const tabs = [
     { id: 'feeds', label: 'RSS Feeds' },
     { id: 'ai', label: 'AI Agents' },
     { id: 'ioc', label: 'IOC Verifiers' },
+    { id: 'cve', label: 'CVE Verification' },
     { id: 'keywords', label: 'Keywords' },
     { id: 'templates', label: 'Report Studio' },
     { id: 'branding', label: 'Branding' },
@@ -59,6 +62,7 @@ const tabs = [
                 <FeedsTab v-if="tab === 'feeds'" :feeds="feeds" />
                 <AiTab v-else-if="tab === 'ai'" :integrations="aiIntegrations" />
                 <IocTab v-else-if="tab === 'ioc'" :verifiers="verifiers" />
+                <CveTab v-else-if="tab === 'cve'" :verifier="cveVerifier" />
                 <KeywordsTab v-else-if="tab === 'keywords'" :rules="keywordRules" :settings="settings" />
                 <TemplatesTab v-else-if="tab === 'templates'" :templates="templates" :variables="variables" />
                 <BrandingTab v-else-if="tab === 'branding'" />

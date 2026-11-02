@@ -95,10 +95,17 @@ class IocCheckService
         $subs = $verifier->sub_services ?? [];
         $found = null;
 
+        // Every abuse.ch API now requires the Auth-Key HTTP header; MalwareBazaar
+        // lives at mb-api.abuse.ch (the mbazaar. subdomain is retired).
+        $authHeader = ['Auth-Key' => (string) $verifier->api_key];
+
         if ($ioc->ioc_type === 'URL' && ($subs['urlhaus'] ?? false)) {
-            $response = Http::timeout(15)->asForm()->post('https://urlhaus-api.abuse.ch/v1/url/', [
-                'url' => $ioc->value,
-            ]);
+            $response = Http::timeout(15)
+                ->withHeaders($authHeader)
+                ->asForm()
+                ->post('https://urlhaus-api.abuse.ch/v1/url/', [
+                    'url' => $ioc->value,
+                ]);
 
             if ($response->successful() && ($response->json('query_status') ?? '') === 'ok') {
                 $abusechData['urlhaus'] = ['threat' => $response->json('threat')];
@@ -107,23 +114,27 @@ class IocCheckService
         }
 
         if (in_array($ioc->ioc_type, ['MD5', 'SHA1', 'SHA256']) && ($subs['malwarebazaar'] ?? false)) {
-            $response = Http::timeout(15)->asForm()->post('https://mbazaar.abuse.ch/api/v1/', [
-                'query' => 'get_info',
-                'hash' => $ioc->value,
-                'auth_key' => (string) $verifier->api_key,
-            ]);
+            $response = Http::timeout(15)
+                ->withHeaders($authHeader)
+                ->asForm()
+                ->post('https://mb-api.abuse.ch/api/v1/', [
+                    'query' => 'get_info',
+                    'hash' => $ioc->value,
+                ]);
 
-            if ($response->successful() && ($response->json('query_status') ?? '') === 'ok') {
+            if ($response->successful() && ($response->json('query_status') ?? '') === 'sha256_hash') {
                 $abusechData['malwarebazaar'] = ['signature' => $response->json('data.0.signature')];
                 $found = 'malicious';
             }
         }
 
         if (in_array($ioc->ioc_type, ['IPv4', 'Domain', 'URL']) && ($subs['threatfox'] ?? false)) {
-            $response = Http::timeout(15)->post('https://threatfox-api.abuse.ch/api/v1/', [
-                'query' => 'search_ioc',
-                'search_term' => $ioc->value,
-            ]);
+            $response = Http::timeout(15)
+                ->withHeaders($authHeader)
+                ->post('https://threatfox-api.abuse.ch/api/v1/', [
+                    'query' => 'search_ioc',
+                    'search_term' => $ioc->value,
+                ]);
 
             if ($response->successful() && ($response->json('query_status') ?? '') === 'ok' && $response->json('data')) {
                 $abusechData['threatfox'] = [

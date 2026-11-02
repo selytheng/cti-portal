@@ -33,9 +33,13 @@ class IocVerifierService
 
         $base = rtrim($verifier->base_url ?: 'https://otx.alienvault.com/api/v1', '/');
 
-        $response = Http::timeout(15)
-            ->withHeaders(['X-OTX-API-KEY' => (string) $verifier->api_key])
-            ->get($base.'/users/me');
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders(['X-OTX-API-KEY' => (string) $verifier->api_key])
+                ->get($base.'/users/me');
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            return ['ok' => false, 'detail' => 'Connection failed: '.$e->getMessage()];
+        }
 
         if ($response->status() === 403) {
             return ['ok' => false, 'detail' => 'API key rejected (403). Check the key.'];
@@ -56,27 +60,35 @@ class IocVerifierService
             return ['ok' => false, 'detail' => 'No auth key configured.'];
         }
 
-        // MalwareBazaar is the auth-aware endpoint of the abuse.ch family.
-        $response = Http::timeout(15)->asForm()->post('https://mbazaar.abuse.ch/api/v1/', [
-            'query' => 'get_recent',
-            'selector' => 'time',
-            'auth_key' => (string) $verifier->api_key,
-        ]);
-
-        if (! $response->successful()) {
-            return ['ok' => false, 'detail' => 'HTTP '.$response->status().' from MalwareBazaar.'];
+        try {
+            // MalwareBazaar lives at mb-api.abuse.ch — the old mbazaar. subdomain
+            // is retired (DNS no longer resolves). All abuse.ch APIs require the
+            // Auth-Key HTTP header.
+            $response = Http::timeout(15)
+                ->withHeaders(['Auth-Key' => trim((string) $verifier->api_key)])
+                ->asForm()
+                ->post('https://mb-api.abuse.ch/api/v1/', [
+                    'query' => 'get_info',
+                    'hash' => '094fd325049b8a9cf6d3e5ef2a6d4cc6a567d7d49c35f8bb8dd9e3c6acf3d78d',
+                ]);
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            return ['ok' => false, 'detail' => 'Connection failed: '.$e->getMessage()];
         }
 
+        // Rejections come back as HTTP 403 with a JSON query_status — surface it.
         $status = $response->json('query_status');
 
-        if ($status === 'no_auth' || $status === 'no_auth_key') {
-            return ['ok' => false, 'detail' => 'Auth key rejected by MalwareBazaar.'];
+        if (! $response->successful()) {
+            return ['ok' => false, 'detail' => 'MalwareBazaar rejected the request (HTTP '.$response->status().($status ? ', '.$status : '').').'];
         }
 
-        if ($status === 'illegal_query') {
-            return ['ok' => false, 'detail' => 'Query rejected — check sub-service configuration.'];
+        $rejected = ['no_auth_key', 'no_api_key', 'unknown_auth_key', 'auth_key_invalid', 'user_blacklisted', 'no_auth'];
+
+        if (in_array($status, $rejected, true)) {
+            return ['ok' => false, 'detail' => 'Auth key rejected by MalwareBazaar ('.$status.').'];
         }
 
-        return ['ok' => true, 'detail' => 'MalwareBazaar responded: query_status='.$status.'.'];
+        // hash_not_found or an actual sample record both prove the key is valid.
+        return ['ok' => true, 'detail' => 'Authenticated OK — MalwareBazaar responded: query_status='.$status.'.'];
     }
 }

@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\VerifyCveRepositoryJob;
 use App\Models\CtiIoc;
 use App\Models\CtiNote;
 use App\Models\CtiRecord;
 use App\Models\CtiReport;
 use App\Models\CtiRevision;
+use App\Models\CveVerifier;
 use App\Models\ReportTemplate;
 use App\Services\CtiExportService;
+use App\Services\CveVerifierService;
 use App\Services\IocCheckService;
 use App\Services\ReportRenderer;
 use Illuminate\Http\Request;
@@ -316,6 +319,33 @@ class CtiRepositoryController extends Controller
         $iocCheck->verifyIoc($ioc);
 
         return back()->with('success', 'IOC re-checked: '.$ioc->verdict);
+    }
+
+    // ===== CVE trust-source verification (NVD / CISA KEV / EPSS) =====
+
+    public function verifyCves(Request $request, CtiRecord $record, CveVerifierService $service)
+    {
+        $verifier = CveVerifier::query()->where('service', 'nvd')->first();
+
+        if (! $verifier) {
+            return back()->withErrors(['cves' => 'CVE verifier (NVD) is not configured.']);
+        }
+
+        $enriched = $service->verifyRecord($record, $verifier);
+
+        return back()->with('success', $enriched
+            ? 'CVEs verified & enriched against NVD / CISA KEV / EPSS.'
+            : 'CVEs were already up to date — nothing changed.');
+    }
+
+    public function verifyAllCves(Request $request)
+    {
+        VerifyCveRepositoryJob::dispatch();
+
+        activity()->causedBy($request->user())->event('cve_verify_triggered')
+            ->log('Triggered repository-wide CVE verification (NVD/KEV/EPSS)');
+
+        return back()->with('success', 'Repository-wide CVE verification dispatched — Horizon will process it.');
     }
 
     // ===== Contributing sources management (spec Section 6 sources JSONB) =====

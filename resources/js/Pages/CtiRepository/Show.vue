@@ -70,6 +70,10 @@ function reverifyAll() {
     router.post(route('cti.reverify', record.id), {}, { preserveScroll: true });
 }
 
+function verifyCves() {
+    router.post(route('cti.verify-cves', record.id), {}, { preserveScroll: true });
+}
+
 function reverifyIoc(ioc) {
     router.post(route('cti.ioc-reverify', ioc.id), {}, { preserveScroll: true });
 }
@@ -191,6 +195,7 @@ const revisedAgo = computed(() => {
                         <option v-for="s in ['New','Developing','Under Review','Verified','Published','False Positive','Archived']" :key="s" :value="s">{{ s }}</option>
                     </select>
                     <SecondaryButton type="button" @click="router.get(route('cti.edit', record.id))">Edit CTI</SecondaryButton>
+                    <SecondaryButton type="button" @click="verifyCves">Verify CVEs</SecondaryButton>
                     <SecondaryButton type="button" @click="reverifyAll">Re-Verify IOCs</SecondaryButton>
                     <SecondaryButton type="button" @click="showReport = true">Generate Report</SecondaryButton>
                     <SecondaryButton type="button" @click="destroyRecord" class="!text-red-600 dark:!text-red-400">Delete</SecondaryButton>

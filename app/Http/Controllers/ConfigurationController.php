@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\AiIntegration;
+use App\Models\CveVerifier;
 use App\Models\IocVerifier;
 use App\Models\KeywordRule;
 use App\Models\ReportTemplate;
 use App\Models\RssFeed;
 use App\Models\SystemSetting;
+use App\Services\CveVerifierService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
@@ -48,10 +50,22 @@ class ConfigurationController extends Controller
             'has_api_key' => filled($v->getRawOriginal('api_key')),
         ]);
 
+        $cveVerifierModel = CveVerifier::query()->where('service', 'nvd')->first();
+        $cveVerifier = $cveVerifierModel ? [
+            'id' => $cveVerifierModel->id,
+            'service' => $cveVerifierModel->service,
+            'base_url' => $cveVerifierModel->base_url,
+            'request_interval_seconds' => $cveVerifierModel->request_interval_seconds,
+            'auto_verify' => $cveVerifierModel->auto_verify,
+            'is_active' => $cveVerifierModel->is_active,
+            'has_api_key' => filled($cveVerifierModel->getRawOriginal('api_key')),
+        ] : null;
+
         return Inertia::render('Configuration/Index', [
             'feeds' => RssFeed::query()->orderBy('name')->get(),
             'aiIntegrations' => $ai,
             'verifiers' => $verifiers,
+            'cveVerifier' => $cveVerifier,
             'keywordRules' => KeywordRule::query()->orderBy('rule_type')->orderBy('keyword')->get(),
             // Unwrap the ['value' => x] wrapper from SystemSetting::put so the
             // frontend sees plain booleans/strings.
@@ -99,5 +113,36 @@ class ConfigurationController extends Controller
             ->log('Reset application logo to default');
 
         return back()->with('success', 'Application logo reset to the default mark.');
+    }
+
+    // ===== CVE trust-source verification (NVD, spec Section 6) =====
+
+    public function updateCveVerifier(Request $request, CveVerifier $cveVerifier)
+    {
+        $data = $request->validate([
+            'api_key' => ['nullable', 'string', 'max:4096'],
+            'base_url' => ['nullable', 'url', 'max:2048'],
+            'request_interval_seconds' => ['required', 'integer', 'min:1', 'max:60'],
+            'auto_verify' => ['required', 'boolean'],
+            'is_active' => ['required', 'boolean'],
+        ]);
+
+        if (! $request->filled('api_key')) {
+            unset($data['api_key']);
+        }
+
+        $cveVerifier->update($data);
+
+        activity()->causedBy($request->user())->event('updated')
+            ->log('Updated CVE verifier (NVD) configuration');
+
+        return back()->with('success', 'CVE verification (NVD) configuration saved.');
+    }
+
+    public function testCveVerifier(CveVerifier $cveVerifier, CveVerifierService $service)
+    {
+        $result = $service->test($cveVerifier);
+
+        return back()->with('testResult', ['type' => 'cve', 'service' => 'nvd', ...$result]);
     }
 }
