@@ -162,7 +162,7 @@ how_to_host.md              # Production deployment guide
 ## Credits
 
 Built as a **vibe-coding collaboration**: specification and acceptance
-testing by [LyTheng Se](https://github.com/lytheng), design and engineering by
+testing by [LyTheng Se](https://github.com/selytheng), design and engineering by
 [OpenClaw](https://openclaw.ai) (Claude/GLM). Framework by the Laravel
 community — and to every maintainer of the open threat-intel feeds this
 portal consumes: CISA, NIST NVD, abuse.ch, AlienVault OTX, FIRST, and the
