@@ -4,49 +4,115 @@ namespace App\Services;
 
 use Illuminate\Support\Str;
 
-/**
- * Renders HTML report templates by substituting the {{variable}} chips from
- * spec Section 5.5. Shared by the "preview" pane in the Report Studio and by
- * the Phase 4 report generator.
- */
 class ReportRenderer
 {
     /**
-     * Substitute template variables. Non-string values (arrays) are rendered
-     * as simple HTML tables for the *_table variables and comma lists
-     * otherwise.
+     * Substitute template variables.
      */
-    public function render(string $html, array $data, ?string $css = null, ?string $logoUrl = null, ?string $watermark = null): string
-    {
-        $data['logo_url'] = $logoUrl ?: ($data['logo_url'] ?? '');
+    public function render(
+        string $html,
+        array $data,
+        ?string $css = null,
+        ?string $logoUrl = null,
+        ?string $watermark = null
+    ): string {
+        // Clean out Javascript 'undefined' or 'null' string literals
+        if (in_array($logoUrl, ['undefined', 'null', ''], true)) {
+            $logoUrl = null;
+        }
+
+        if (isset($data['logo_url']) && in_array($data['logo_url'], ['undefined', 'null'], true)) {
+            $data['logo_url'] = '';
+        }
+
+        // Resolve logo: parameter > data array > empty string
+        $resolvedLogo = $logoUrl ?: ($data['logo_url'] ?? '');
+
+        // If no logo is provided, strip <img> tag so a broken image icon doesn't show
+        if (empty($resolvedLogo)) {
+            $html = preg_replace('/<img[^>]*src=["\']\{\{logo_url\}\}["\'][^>]*\s*\/?>/i', '', $html);
+        } else {
+            $data['logo_url'] = $resolvedLogo;
+        }
+
         $data['watermark'] = $watermark ?: ($data['watermark'] ?? '');
         $data['generated_at'] = $data['generated_at'] ?? now()->toDayDateTimeString();
 
-        // Spec 5.5 chips use {{cves_table}}/{{iocs_table}} while callers pass
-        // the lists under 'cves'/'iocs' — expose both names.
+        // Support both list array and _table suffix
         foreach (['cves', 'iocs'] as $listKey) {
-            if (isset($data[$listKey]) && ! isset($data[$listKey.'_table'])) {
-                $data[$listKey.'_table'] = $data[$listKey];
+            if (isset($data[$listKey]) && ! isset($data[$listKey . '_table'])) {
+                $data[$listKey . '_table'] = $data[$listKey];
             }
         }
 
+        // Variable substitution
         foreach ($data as $key => $value) {
-            $html = str_replace('{{'.$key.'}}', $this->stringify($key, $value), $html);
+            $html = str_replace('{{' . $key . '}}', $this->stringify($key, $value), $html);
         }
 
-        // Remove any chips without a value so drafts preview cleanly.
-        $html = preg_replace('/\{\{[a-z_]+\}\}/', '', $html);
+        // Remove unpopulated chips
+        $html = preg_replace('/\{\{[a-z0-9_]+\}\}/', '', $html);
 
-        if ($css) {
-            $html = preg_replace('/<style>(.*?)<\/style>/s', '<style>'.$css.'</style>', $html);
+        // Inject custom CSS if provided
+        if ($css && trim($css) !== '') {
+            if (str_contains($html, '<style>')) {
+                $html = preg_replace('/<style>(.*?)<\/style>/s', '<style>' . $css . '</style>', $html);
+            } else {
+                $html = "<style>\n{$css}\n</style>\n" . $html;
+            }
         }
 
         return $html;
     }
 
     /**
-     * A realistic sample CTI record so the Report Studio preview shows the
-     * template exactly as a generated report would look.
+     * Resolves local storage, public files, or external URLs into Base64 format.
+     */
+    public function imageToBase64(?string $pathOrUrl): ?string
+    {
+        if (empty($pathOrUrl) || in_array($pathOrUrl, ['undefined', 'null'], true)) {
+            return null;
+        }
+
+        if (str_starts_with($pathOrUrl, 'data:image/')) {
+            return $pathOrUrl;
+        }
+
+        $resolvedPath = null;
+
+        if (file_exists($pathOrUrl)) {
+            $resolvedPath = $pathOrUrl;
+        } elseif (file_exists(public_path($pathOrUrl))) {
+            $resolvedPath = public_path($pathOrUrl);
+        } elseif (file_exists(storage_path('app/public/' . ltrim($pathOrUrl, '/')))) {
+            $resolvedPath = storage_path('app/public/' . ltrim($pathOrUrl, '/'));
+        }
+
+        if ($resolvedPath && file_exists($resolvedPath)) {
+            $mimeType = mime_content_type($resolvedPath) ?: 'image/png';
+            $data = file_get_contents($resolvedPath);
+            return 'data:' . $mimeType . ';base64,' . base64_encode($data);
+        }
+
+        return $pathOrUrl;
+    }
+
+    /**
+     * Sample fallback SVG logo for Studio preview when no custom logo is uploaded yet.
+     */
+    public function placeholderLogo(): string
+    {
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="48" viewBox="0 0 160 48">
+            <rect width="160" height="48" rx="8" fill="#1e293b"/>
+            <path d="M20 14L28 24L20 34" stroke="#38bdf8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <text x="38" y="29" fill="#f8fafc" font-family="sans-serif" font-size="14" font-weight="bold">CTI PORTAL</text>
+        </svg>';
+
+        return 'data:image/svg+xml;base64,' . base64_encode($svg);
+    }
+
+    /**
+     * Realistic sample CTI record for Report Studio template previews.
      */
     public function sampleData(): array
     {
@@ -82,16 +148,14 @@ class ReportRenderer
     private function stringify(string $key, mixed $value): string
     {
         if (is_array($value)) {
-            // Lists of structs (CVEs, IOCs…) render as tables regardless of
-            // the key name — this was the "Array to string conversion" crash.
-            $containsArrays = collect($value)->contains(fn ($v) => is_array($v));
+            $containsArrays = collect($value)->contains(fn($v) => is_array($v));
 
             if (str_ends_with($key, '_table') || $containsArrays) {
                 return $this->table($value);
             }
 
             return implode(', ', array_map(
-                fn ($v) => is_array($v) ? $this->table([$v]) : strval($v),
+                fn($v) => is_array($v) ? $this->table([$v]) : strval($v),
                 $value
             ));
         }
@@ -106,12 +170,12 @@ class ReportRenderer
         }
 
         $headers = array_keys($rows[0]);
-        $head = implode('', array_map(fn ($h) => '<th>'.htmlspecialchars((string) $h).'</th>', $headers));
+        $head = implode('', array_map(fn($h) => '<th>' . htmlspecialchars((string) $h) . '</th>', $headers));
         $body = implode('', array_map(function (array $row) {
-            return '<tr>'.implode('', array_map(
-                fn ($cell) => '<td>'.htmlspecialchars((string) $cell).'</td>',
+            return '<tr>' . implode('', array_map(
+                fn($cell) => '<td>' . htmlspecialchars((string) $cell) . '</td>',
                 array_values($row)
-            )).'</tr>';
+            )) . '</tr>';
         }, $rows));
 
         return "<table><thead><tr>{$head}</tr></thead><tbody>{$body}</tbody></table>";

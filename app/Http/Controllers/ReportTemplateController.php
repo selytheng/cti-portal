@@ -64,12 +64,49 @@ class ReportTemplateController extends Controller
     {
         $html = $request->input('html_content', $template->html_content);
         $css = $request->input('css_styles', $template->css_styles);
-        $logoUrl = $template->logo_path ? Storage::url($template->logo_path) : null;
+
+        // 1. Direct file upload from the preview request if sent as FormData
+        $logoUrl = null;
+        if ($request->hasFile('logo')) {
+            $file = $request->file('logo');
+            $mime = $file->getMimeType() ?: 'image/png';
+            $logoUrl = 'data:' . $mime . ';base64,' . base64_encode(file_get_contents($file->getRealPath()));
+        }
+
+        // 2. Check if frontend sent the stored path, URL, or data URI
+        if (! $logoUrl) {
+            $logoInput = $request->input('logo_path')
+                ?? $request->input('logo_url')
+                ?? $template->logo_path;
+
+            if ($logoInput && ! in_array($logoInput, ['undefined', 'null', ''], true)) {
+                $logoUrl = $this->resolveLogoToBase64($logoInput);
+            }
+        }
+
+        // 3. Fallback: Check if there's any recently uploaded logo file in storage/app/public/logos
+        if (! $logoUrl && Storage::disk('public')->exists('logos')) {
+            $files = Storage::disk('public')->files('logos');
+            if (! empty($files)) {
+                // Grab the latest uploaded logo
+                $latest = collect($files)->sortByDesc(fn($f) => Storage::disk('public')->lastModified($f))->first();
+                if ($latest) {
+                    $logoUrl = $this->resolveLogoToBase64($latest);
+                }
+            }
+        }
+
+        // 4. Last resort: only use placeholder if literally no logo file exists
+        if (! $logoUrl) {
+            $logoUrl = $renderer->placeholderLogo();
+        }
+
+        $watermark = $request->input('watermark_text', $template->watermark_text);
 
         return back()->with('testResult', [
             'type' => 'template_preview',
             'template_id' => $template->id,
-            'html' => $renderer->render((string) $html, $renderer->sampleData(), $css, $logoUrl, $template->watermark_text),
+            'html' => $renderer->render((string) $html, $renderer->sampleData(), $css, $logoUrl, $watermark),
         ]);
     }
 
@@ -89,7 +126,32 @@ class ReportTemplateController extends Controller
             'type' => 'logo',
             'path' => $path,
             'url' => Storage::url($path),
+            'base64' => $this->resolveLogoToBase64($path),
         ]);
+    }
+
+    private function resolveLogoToBase64(string $pathOrUrl): ?string
+    {
+        if (str_starts_with($pathOrUrl, 'data:image/')) {
+            return $pathOrUrl;
+        }
+
+        $realPath = null;
+
+        if (Storage::disk('public')->exists($pathOrUrl)) {
+            $realPath = Storage::disk('public')->path($pathOrUrl);
+        } elseif (file_exists(storage_path('app/public/' . ltrim($pathOrUrl, '/')))) {
+            $realPath = storage_path('app/public/' . ltrim($pathOrUrl, '/'));
+        } elseif (file_exists(public_path($pathOrUrl))) {
+            $realPath = public_path($pathOrUrl);
+        }
+
+        if ($realPath && file_exists($realPath)) {
+            $mime = mime_content_type($realPath) ?: 'image/png';
+            return 'data:' . $mime . ';base64,' . base64_encode(file_get_contents($realPath));
+        }
+
+        return asset('storage/' . ltrim($pathOrUrl, '/'));
     }
 
     private function validated(Request $request, ?ReportTemplate $existing = null): array
