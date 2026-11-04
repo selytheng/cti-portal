@@ -1,6 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head, router } from '@inertiajs/vue3';
+import { Head, Link, router } from '@inertiajs/vue3';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
 import TextInput from '@/Components/TextInput.vue';
 import { ref } from 'vue';
@@ -12,9 +12,14 @@ const props = defineProps({
 
 const event = ref(props.filters?.event ?? '');
 const causer = ref(props.filters?.causer ?? '');
+const perPage = ref(props.filters?.per_page ?? 20);
 
 function doFilter() {
-    router.get(route('audit.index'), { event: event.value, causer: causer.value }, { preserveState: true, replace: true });
+    router.get(
+        route('audit.index'),
+        { event: event.value, causer: causer.value, per_page: perPage.value },
+        { preserveState: true, replace: true }
+    );
 }
 
 function fmt(value) {
@@ -117,18 +122,37 @@ function toggle(id) {
                         </table>
                     </div>
 
-                    <div v-if="activities.links.length > 3" class="flex flex-wrap gap-1 border-t border-gray-200 p-4 dark:border-gray-700">
-                        <component
-                            v-for="(link, i) in activities.links"
-                            :key="i"
-                            :is="link.url ? 'Link' : 'span'"
-                            :href="link.url ?? undefined"
-                            class="rounded px-3 py-1 text-sm"
-                            :class="link.active
-                                ? 'bg-indigo-600 text-white'
-                                : (link.url ? 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700' : 'text-gray-400')"
-                            v-html="link.label"
-                        />
+                    <div class="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 p-4 dark:border-gray-700">
+                        <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                            <span>Rows per page:</span>
+                            <select
+                                v-model="perPage"
+                                @change="doFilter"
+                                class="rounded-md border-gray-300 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                            >
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                                <option :value="1000">1000</option>
+                            </select>
+                            <span v-if="activities.total !== undefined" class="ml-2 text-xs text-gray-500">
+                                (Total: {{ activities.total }})
+                            </span>
+                        </div>
+
+                        <div v-if="(activities.links ?? []).length > 3" class="flex flex-wrap gap-1">
+                            <component
+                                v-for="(link, i) in activities.links"
+                                :key="i"
+                                :is="link.url ? Link : 'span'"
+                                :href="link.url ?? undefined"
+                                class="rounded px-3 py-1 text-sm"
+                                :class="link.active
+                                    ? 'bg-indigo-600 text-white'
+                                    : (link.url ? 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700' : 'text-gray-400')"
+                                v-html="link.label"
+                            />
+                        </div>
                     </div>
                 </div>
             </div>

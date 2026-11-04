@@ -8,6 +8,7 @@ use App\Models\CtiRecord;
 use App\Models\CtiRevision;
 use App\Models\QueryRun;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -38,8 +39,10 @@ class StoryCorrelator
             return null;
         }
 
+        $driver = DB::getDriverName();
+
         return CtiRecord::query()
-            ->whereRaw('sources::text ILIKE ?', ['%'.$url.'%'])
+            ->whereRaw($driver === 'pgsql' ? 'sources::text ILIKE ?' : 'sources LIKE ?', ['%'.$url.'%'])
             ->first();
     }
 

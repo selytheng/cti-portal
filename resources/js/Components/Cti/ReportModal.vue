@@ -39,20 +39,40 @@ function downloadHtml() {
     URL.revokeObjectURL(a.href);
 }
 
+const isDownloadingPdf = ref(false);
+
 async function downloadPdf() {
-    const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]+)/) ?? [])[1] ?? '');
-    const resp = await fetch(route('cti.report-pdf'), {
-        method: 'POST',
-        headers: { 'X-XSRF-TOKEN': xsrf, 'Content-Type': 'application/json', Accept: 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ cti_ids: props.ctiIds, template_id: templateId.value || null }),
-    });
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'cti-report.pdf';
-    a.click();
-    URL.revokeObjectURL(a.href);
+    if (isDownloadingPdf.value) return;
+    isDownloadingPdf.value = true;
+    try {
+        const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]+)/) ?? [])[1] ?? '');
+        const resp = await fetch(route('cti.report-pdf'), {
+            method: 'POST',
+            headers: { 'X-XSRF-TOKEN': xsrf, 'Content-Type': 'application/json', Accept: 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ cti_ids: props.ctiIds, template_id: templateId.value || null }),
+        });
+
+        if (!resp.ok) {
+            throw new Error(`Server returned status ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        if (data && data.download_url) {
+            const a = document.createElement('a');
+            a.href = data.download_url;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } else {
+            throw new Error('No download URL returned from server.');
+        }
+    } catch (err) {
+        console.error('Download PDF error:', err);
+        alert('Failed to generate PDF report. Please try again.');
+    } finally {
+        isDownloadingPdf.value = false;
+    }
 }
 </script>
 
@@ -74,7 +94,9 @@ async function downloadPdf() {
             <div class="mb-4 flex flex-wrap gap-2">
                 <SecondaryButton type="button" @click="preview">Preview</SecondaryButton>
                 <SecondaryButton type="button" :disabled="!previewHtml" @click="downloadHtml">Download HTML</SecondaryButton>
-                <PrimaryButton type="button" @click="downloadPdf">⬇ Download PDF</PrimaryButton>
+                <PrimaryButton type="button" :disabled="isDownloadingPdf" @click="downloadPdf">
+                    {{ isDownloadingPdf ? '⏳ Generating PDF…' : '⬇ Download PDF' }}
+                </PrimaryButton>
             </div>
 
             <iframe

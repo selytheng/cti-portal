@@ -17,7 +17,7 @@ class CtiRecord extends Model
     ];
 
     public const WORKFLOW_STATUSES = [
-        'New', 'Developing', 'Under Review', 'Verified', 'Published', 'False Positive', 'Archived',
+        'New', 'Developing', 'Under Review', 'Verified', 'Published', 'False Positive', 'Archived', 'Not Applicable',
     ];
 
     protected $fillable = [

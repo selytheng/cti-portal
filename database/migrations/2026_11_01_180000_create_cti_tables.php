@@ -77,9 +77,15 @@ return new class extends Migration
         });
 
         // Full-text + similarity search infrastructure (spec 1.1/8: tsvector + pg_trgm).
-        DB::statement("ALTER TABLE cti_records ADD COLUMN search tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(subject,'') || ' ' || coalesce(summary,''))) STORED");
-        DB::statement('CREATE INDEX cti_records_search_idx ON cti_records USING GIN (search)');
-        DB::statement('CREATE INDEX cti_records_subject_trgm_idx ON cti_records USING GIN (subject gin_trgm_ops)');
+        if (DB::getDriverName() === 'pgsql') {
+            DB::statement("ALTER TABLE cti_records ADD COLUMN search tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(subject,'') || ' ' || coalesce(summary,''))) STORED");
+            DB::statement('CREATE INDEX cti_records_search_idx ON cti_records USING GIN (search)');
+            DB::statement('CREATE INDEX cti_records_subject_trgm_idx ON cti_records USING GIN (subject gin_trgm_ops)');
+        } else {
+            Schema::table('cti_records', function (Blueprint $table) {
+                $table->text('search')->nullable();
+            });
+        }
 
         Schema::create('cti_iocs', function (Blueprint $table) {
             $table->id();

@@ -1,6 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { router, useForm, usePage } from '@inertiajs/vue3';
 import InputError from '@/Components/InputError.vue';
@@ -12,6 +12,7 @@ import TextInput from '@/Components/TextInput.vue';
 const props = defineProps({
     activeQueries: Array,
     history: Object,
+    perPage: Number,
     feeds: Array,
     aiIntegrations: Array,
     canExecute: Boolean,
@@ -20,10 +21,20 @@ const props = defineProps({
 const page = usePage();
 const showRunModal = ref(false);
 const expandedRun = ref(null);
+const perPage = ref(props.perPage ?? 20);
+
+function changePerPage() {
+    router.get(route('queryhub.index'), { per_page: perPage.value }, { preserveState: true, replace: true });
+}
+
+function openRunModal() {
+    form.lookback_days = 1;
+    showRunModal.value = true;
+}
 
 // ===== "Run Intelligence Query" + Days-Ago pop-up (spec Section 4) =====
 const form = useForm({
-    lookback_days: 7,
+    lookback_days: 1,
     feed_ids: [],
     use_keywords: true,
     ai_integration_id: '',
@@ -48,7 +59,7 @@ function runQuery() {
             onSuccess: () => {
                 showRunModal.value = false;
                 form.feed_ids = [];
-                form.lookback_days = 7;
+                form.lookback_days = 1;
             },
         });
 }
@@ -126,7 +137,7 @@ const historyList = computed(() => props.history.data ?? props.history);
                     <p class="text-sm text-gray-500 dark:text-gray-400">
                         Pull fresh threat intelligence from your configured feeds within a lookback window.
                     </p>
-                    <PrimaryButton v-if="canExecute" @click="showRunModal = true">
+                    <PrimaryButton v-if="canExecute" @click="openRunModal">
                         ⚡ Run Intelligence Query
                     </PrimaryButton>
                 </div>
@@ -285,19 +296,38 @@ const historyList = computed(() => props.history.data ?? props.history);
                         </table>
                     </div>
 
-                    <!-- Pagination -->
-                    <div v-if="(history.links ?? []).length > 3" class="flex flex-wrap gap-1 border-t border-gray-200 p-4 dark:border-gray-700">
-                        <component
-                            v-for="(link, i) in history.links"
-                            :key="i"
-                            :is="link.url ? 'Link' : 'span'"
-                            :href="link.url ?? undefined"
-                            class="rounded px-3 py-1 text-sm"
-                            :class="link.active
-                                ? 'bg-indigo-600 text-white'
-                                : (link.url ? 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700' : 'text-gray-400')"
-                            v-html="link.label"
-                        />
+                    <!-- Pagination & Per Page -->
+                    <div class="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 p-4 dark:border-gray-700">
+                        <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                            <span>Rows per page:</span>
+                            <select
+                                v-model="perPage"
+                                @change="changePerPage"
+                                class="rounded-md border-gray-300 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                            >
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                                <option :value="1000">1000</option>
+                            </select>
+                            <span v-if="history.total !== undefined" class="ml-2 text-xs text-gray-500">
+                                (Total: {{ history.total }})
+                            </span>
+                        </div>
+
+                        <div v-if="(history.links ?? []).length > 3" class="flex flex-wrap gap-1">
+                            <component
+                                v-for="(link, i) in history.links"
+                                :key="i"
+                                :is="link.url ? Link : 'span'"
+                                :href="link.url ?? undefined"
+                                class="rounded px-3 py-1 text-sm"
+                                :class="link.active
+                                    ? 'bg-indigo-600 text-white'
+                                    : (link.url ? 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700' : 'text-gray-400')"
+                                v-html="link.label"
+                            />
+                        </div>
                     </div>
                 </div>
             </div>

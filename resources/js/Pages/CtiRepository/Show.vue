@@ -192,7 +192,7 @@ const revisedAgo = computed(() => {
                         @change="quickStatus($event.target.value)"
                         class="rounded-md border-gray-300 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
                     >
-                        <option v-for="s in ['New','Developing','Under Review','Verified','Published','False Positive','Archived']" :key="s" :value="s">{{ s }}</option>
+                        <option v-for="s in ['New','Developing','Under Review','Verified','Published','False Positive','Archived','Not Applicable']" :key="s" :value="s">{{ s }}</option>
                     </select>
                     <SecondaryButton type="button" @click="router.get(route('cti.edit', record.id))">Edit CTI</SecondaryButton>
                     <SecondaryButton type="button" @click="verifyCves">Verify CVEs</SecondaryButton>

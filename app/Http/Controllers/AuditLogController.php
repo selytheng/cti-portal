@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Spatie\Activitylog\Models\Activity;
 
@@ -14,6 +15,13 @@ class AuditLogController extends Controller
      */
     public function index(Request $request)
     {
+        $perPage = (int) $request->input('per_page', 20);
+        if (! in_array($perPage, [20, 50, 100, 1000], true)) {
+            $perPage = 20;
+        }
+
+        $likeOp = DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+
         $activities = Activity::query()
             ->with(['causer:id,name,email', 'subject:id'])
             ->when(
@@ -22,15 +30,15 @@ class AuditLogController extends Controller
             )
             ->when(
                 $request->input('causer'),
-                fn ($q, $c) => $q->whereHas('causer', fn ($cq) => $cq->where('email', 'ilike', "%{$c}%"))
+                fn ($q, $c) => $q->whereHas('causer', fn ($cq) => $cq->where('email', $likeOp, "%{$c}%"))
             )
             ->latest()
-            ->paginate(25)
+            ->paginate($perPage)
             ->withQueryString();
 
         return Inertia::render('Audit/Index', [
             'activities' => $activities,
-            'filters' => $request->only(['event', 'causer']),
+            'filters' => array_merge($request->only(['event', 'causer']), ['per_page' => $perPage]),
         ]);
     }
 }

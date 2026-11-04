@@ -103,7 +103,7 @@ function cancel() {
                         <div>
                             <InputLabel value="Workflow status" />
                             <select v-model="form.workflow_status" class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
-                                <option v-for="s in ['New','Developing','Under Review','Verified','Published','False Positive','Archived']" :key="s" :value="s">{{ s }}</option>
+                                <option v-for="s in ['New','Developing','Under Review','Verified','Published','False Positive','Archived','Not Applicable']" :key="s" :value="s">{{ s }}</option>
                             </select>
                         </div>
                     </div>

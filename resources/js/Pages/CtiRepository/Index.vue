@@ -1,6 +1,6 @@
 <script setup>
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import { Head } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
 import { computed, ref } from 'vue';
 import { router, usePage } from '@inertiajs/vue3';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
@@ -11,21 +11,53 @@ import ReportModal from '@/Components/Cti/ReportModal.vue';
 const props = defineProps({ records: Object, filters: Object, templates: Array });
 
 const page = usePage();
-const filters = ref({ ...props.filters });
+const filters = ref({
+    per_page: 20,
+    ...props.filters,
+});
 const selected = ref([]);
 const reportIds = ref([]);
 const showReport = ref(false);
+const showFilters = ref(false);
+const showStatusModal = ref(false);
+const selectedStatus = ref('New');
+
+const workflowStatuses = [
+    'New',
+    'Developing',
+    'Under Review',
+    'Verified',
+    'Published',
+    'False Positive',
+    'Archived',
+    'Not Applicable',
+];
 
 const list = computed(() => props.records.data ?? props.records);
 const allSelected = computed(() => list.value.length > 0 && selected.value.length === list.value.length);
+
+const activeFilterCount = computed(() => {
+    let count = 0;
+    const f = filters.value;
+    if (f.search) count++;
+    if (f.type) count++;
+    if (f.severity) count++;
+    if (f.workflow_status) count++;
+    if (f.ioc_verdict) count++;
+    if (f.modified_from) count++;
+    if (f.modified_to) count++;
+    if (f.developing) count++;
+    if (f.focus_matched) count++;
+    return count;
+});
 
 function applyFilters() {
     router.get(route('cti.index'), { ...filters.value }, { preserveState: true });
 }
 
 function resetFilters() {
-    filters.value = {};
-    router.get(route('cti.index'), {}, { preserveState: true });
+    filters.value = { per_page: filters.value.per_page ?? 20 };
+    router.get(route('cti.index'), { per_page: filters.value.per_page }, { preserveState: true });
 }
 
 function toggleAll(e) {
@@ -37,11 +69,25 @@ function toggleRow(id) {
     i === -1 ? selected.value.push(id) : selected.value.splice(i, 1);
 }
 
-function bulkStatus() {
+function openBulkStatusModal() {
     if (!selected.value.length) return;
-    const s = prompt('New workflow status (New, Developing, Under Review, Verified, Published, False Positive, Archived):');
-    if (!s) return;
-    router.post(route('cti.bulk-status'), { ids: selected.value, workflow_status: s }, { preserveState: true, onSuccess: () => (selected.value = []) });
+    selectedStatus.value = 'New';
+    showStatusModal.value = true;
+}
+
+function confirmBulkStatus() {
+    if (!selected.value.length || !selectedStatus.value) return;
+    router.post(
+        route('cti.bulk-status'),
+        { ids: selected.value, workflow_status: selectedStatus.value },
+        {
+            preserveState: true,
+            onSuccess: () => {
+                selected.value = [];
+                showStatusModal.value = false;
+            },
+        }
+    );
 }
 
 function bulkDestroy() {
@@ -105,8 +151,28 @@ function isRecentlyUpdated(r) {
                     {{ page.props.flash.success }}
                 </div>
 
-                <!-- Filter bar (spec 6) -->
-                <div class="mb-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                <!-- Top bar with Filter Toggle -->
+                <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <SecondaryButton
+                        type="button"
+                        @click="showFilters = !showFilters"
+                        class="flex items-center gap-2"
+                    >
+                        <span>{{ showFilters ? '✕ Hide Filter' : '🔍 Open Filter to Search' }}</span>
+                        <span
+                            v-if="activeFilterCount > 0"
+                            class="rounded-full bg-indigo-500/20 px-2 py-0.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400"
+                        >
+                            {{ activeFilterCount }} active
+                        </span>
+                    </SecondaryButton>
+                </div>
+
+                <!-- Filter bar (hidden initially, toggled by button) -->
+                <div
+                    v-if="showFilters"
+                    class="mb-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800"
+                >
                     <form @submit.prevent="applyFilters" class="flex flex-wrap items-end gap-3">
                         <div class="grow sm:grow-0 sm:w-72">
                             <label class="mb-1 block text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Full-text search</label>
@@ -129,7 +195,7 @@ function isRecentlyUpdated(r) {
                             <label class="mb-1 block text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Workflow</label>
                             <select v-model="filters.workflow_status" class="rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
                                 <option value="">—</option>
-                                <option v-for="s in ['New','Developing','Under Review','Verified','Published','False Positive','Archived']" :key="s" :value="s">{{ s }}</option>
+                                <option v-for="s in workflowStatuses" :key="s" :value="s">{{ s }}</option>
                             </select>
                         </div>
                         <div>
@@ -166,7 +232,7 @@ function isRecentlyUpdated(r) {
                     class="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-indigo-500/40 bg-indigo-500/10 p-4 text-sm"
                 >
                     <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ selected.length }} selected</span>
-                    <SecondaryButton type="button" @click="bulkStatus">Set status</SecondaryButton>
+                    <SecondaryButton type="button" @click="openBulkStatusModal">Set status</SecondaryButton>
                     <SecondaryButton type="button" @click="exportCsv">Export CSV</SecondaryButton>
                     <SecondaryButton type="button" @click="exportStix">Export STIX 2.1</SecondaryButton>
                     <SecondaryButton type="button" @click="quickReport(selected)">Consolidated Report</SecondaryButton>
@@ -230,19 +296,68 @@ function isRecentlyUpdated(r) {
                         </table>
                     </div>
 
-                    <div v-if="(records.links ?? []).length > 3" class="flex flex-wrap gap-1 border-t border-gray-200 p-4 dark:border-gray-700">
-                        <component
-                            v-for="(link, i) in records.links"
-                            :key="i"
-                            :is="link.url ? 'Link' : 'span'"
-                            :href="link.url ?? undefined"
-                            class="rounded px-3 py-1 text-sm"
-                            :class="link.active
-                                ? 'bg-indigo-600 text-white'
-                                : (link.url ? 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700' : 'text-gray-400')"
-                            v-html="link.label"
-                        />
+                    <!-- Pagination & Per Page -->
+                    <div class="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 p-4 dark:border-gray-700">
+                        <div class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                            <span>Rows per page:</span>
+                            <select
+                                v-model="filters.per_page"
+                                @change="applyFilters"
+                                class="rounded-md border-gray-300 py-1 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                            >
+                                <option :value="20">20</option>
+                                <option :value="50">50</option>
+                                <option :value="100">100</option>
+                                <option :value="1000">1000</option>
+                            </select>
+                            <span v-if="records.total !== undefined" class="ml-2 text-xs text-gray-500">
+                                (Total: {{ records.total }})
+                            </span>
+                        </div>
+
+                        <div v-if="(records.links ?? []).length > 3" class="flex flex-wrap gap-1">
+                            <component
+                                v-for="(link, i) in records.links"
+                                :key="i"
+                                :is="link.url ? Link : 'span'"
+                                :href="link.url ?? undefined"
+                                class="rounded px-3 py-1 text-sm"
+                                :class="link.active
+                                    ? 'bg-indigo-600 text-white'
+                                    : (link.url ? 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700' : 'text-gray-400')"
+                                v-html="link.label"
+                            />
+                        </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bulk Status Selection Modal -->
+        <div v-if="showStatusModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800">
+                <h3 class="mb-2 text-lg font-semibold text-gray-800 dark:text-gray-200">
+                    Update Workflow Status
+                </h3>
+                <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
+                    Select the new workflow status for {{ selected.length }} selected CTI{{ selected.length > 1 ? 's' : '' }}.
+                </p>
+
+                <div class="mb-5">
+                    <label class="mb-1 block text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        Workflow Status
+                    </label>
+                    <select
+                        v-model="selectedStatus"
+                        class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                    >
+                        <option v-for="s in workflowStatuses" :key="s" :value="s">{{ s }}</option>
+                    </select>
+                </div>
+
+                <div class="flex justify-end gap-2">
+                    <SecondaryButton type="button" @click="showStatusModal = false">Cancel</SecondaryButton>
+                    <PrimaryButton type="button" @click="confirmBulkStatus">Update Status</PrimaryButton>
                 </div>
             </div>
         </div>

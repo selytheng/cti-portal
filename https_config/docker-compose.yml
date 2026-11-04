@@ -51,6 +51,7 @@ services:
         volumes:
             - app_storage:/var/www/html/storage
             - ./docker/ssl:/etc/nginx/ssl:ro,z
+            - ./docker/dns/resolv.conf:/etc/resolv.conf:ro
         depends_on:
             postgres:
                 condition: service_healthy

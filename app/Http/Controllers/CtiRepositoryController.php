@@ -14,8 +14,10 @@ use App\Services\CtiExportService;
 use App\Services\CveVerifierService;
 use App\Services\IocCheckService;
 use App\Services\ReportRenderer;
+use Dompdf\Dompdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -29,14 +31,26 @@ class CtiRepositoryController extends Controller
      */
     public function index(Request $request)
     {
+        $perPage = (int) $request->input('per_page', 20);
+        if (! in_array($perPage, [20, 50, 100, 1000], true)) {
+            $perPage = 20;
+        }
+
+        $driver = DB::getDriverName();
+        $ilike = $driver === 'pgsql' ? 'ILIKE' : 'LIKE';
+
         $records = CtiRecord::query()
             ->with('iocs:ioc_type,value,verdict,cti_record_id')
-            ->when($request->input('search'), function ($q, $s) {
-                $q->where(function ($qq) use ($s) {
-                    $qq->whereRaw("search @@ plainto_tsquery('english', ?)", [$s]);
+            ->when($request->input('search'), function ($q, $s) use ($driver, $ilike) {
+                $q->where(function ($qq) use ($s, $driver, $ilike) {
+                    if ($driver === 'pgsql') {
+                        $qq->whereRaw("search @@ plainto_tsquery('english', ?)", [$s]);
+                    } else {
+                        $qq->where('subject', 'like', "%{$s}%")->orWhere('summary', 'like', "%{$s}%");
+                    }
 
                     if (preg_match('/CVE-\d{4}-\d{4,}/i', $s)) {
-                        $qq->orWhereRaw('cves::text ILIKE ?', ['%'.$s.'%']);
+                        $qq->orWhereRaw("cves::text {$ilike} ?", ['%'.$s.'%']);
                     }
                 });
             })
@@ -46,23 +60,23 @@ class CtiRepositoryController extends Controller
             ->when($request->input('workflow_status'), fn ($q, $v) => $q->where('workflow_status', $v))
             ->when($request->boolean('developing'), fn ($q) => $q->where('is_developing', true))
             ->when($request->input('ioc_verdict'), fn ($q, $v) => $q->whereHas('iocs', fn ($iq) => $iq->where('verdict', $v)))
-            ->when($request->input('source_feed'), fn ($q, $v) => $q->whereRaw('sources::text ILIKE ?', ['%'.$v.'%']))
+            ->when($request->input('source_feed'), fn ($q, $v) => $q->whereRaw("sources::text {$ilike} ?", ['%'.$v.'%']))
             ->when($request->boolean('focus_matched'), fn ($q) => $q->whereNotNull('matched_focus_keywords'))
             ->when($request->input('published_from'), fn ($q, $v) => $q->where('published_at', '>=', $v))
             ->when($request->input('published_to'), fn ($q, $v) => $q->where('published_at', '<=', $v.' 23:59:59'))
             ->when($request->input('modified_from'), fn ($q, $v) => $q->where('modified_at', '>=', $v))
             ->when($request->input('modified_to'), fn ($q, $v) => $q->where('modified_at', '<=', $v.' 23:59:59'))
             ->orderByDesc('modified_at')
-            ->paginate(15)
+            ->paginate($perPage)
             ->withQueryString();
 
         return Inertia::render('CtiRepository/Index', [
             'records' => $records,
-            'filters' => $request->only([
+            'filters' => array_merge($request->only([
                 'search', 'type', 'severity', 'tlp', 'workflow_status', 'developing',
                 'ioc_verdict', 'source_feed', 'focus_matched',
                 'published_from', 'published_to', 'modified_from', 'modified_to',
-            ]),
+            ]), ['per_page' => $perPage]),
             'templates' => ReportTemplate::query()->orderBy('name')->get(['id', 'name', 'is_default']),
         ]);
     }
@@ -228,7 +242,7 @@ class CtiRepositoryController extends Controller
                 ]))
                 ->map(fn (array $row) => implode(',', $row))
                 ->implode("\n"), 200, ['Content-Type' => 'text/csv']),
-            'stix' => response()->json((new CtiExportService())->toStix($iocs->map(fn ($i) => $i->ctiRecord)->unique('id')->filter())),
+            'stix' => response()->json((new CtiExportService)->toStix($iocs->map(fn ($i) => $i->ctiRecord)->unique('id')->filter())),
             default => response($iocs->pluck('value')->implode("\n"), 200, ['Content-Type' => 'text/plain']),
         };
     }
@@ -259,11 +273,12 @@ class CtiRepositoryController extends Controller
         $records = CtiRecord::query()->whereIn('id', $data['cti_ids'])->orderBy('cti_id')->get();
         $html = $this->renderReports($records, $data, $export, $renderer);
 
-        $pdf = new \Dompdf\Dompdf(['isRemoteEnabled' => true, 'defaultFont' => 'DejaVu Sans']);
+        $pdf = new Dompdf(['isRemoteEnabled' => true, 'defaultFont' => 'DejaVu Sans']);
         $pdf->loadHtml($html);
         $pdf->setPaper('a4', 'portrait');
         $pdf->render();
 
+        Storage::makeDirectory('reports');
         $path = 'reports/'.Str::uuid().'.pdf';
         Storage::put($path, $pdf->output());
 
@@ -279,6 +294,12 @@ class CtiRepositoryController extends Controller
 
         activity()->causedBy($request->user())->event('report_generated')
             ->log("Generated PDF report {$report->title}");
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'download_url' => route('cti.report-download', $report),
+            ]);
+        }
 
         return back()->with('testResult', [
             'type' => 'report_pdf',
@@ -477,7 +498,10 @@ class CtiRepositoryController extends Controller
     private function renderReports(Collection $records, array $data, CtiExportService $export, ReportRenderer $renderer): string
     {
         $template = ReportTemplate::find($data['template_id']);
-        $logoUrl = ($template && $template->logo_path) ? Storage::url($template->logo_path) : null;
+        $logoUrl = null;
+        if ($template && $template->logo_path) {
+            $logoUrl = $renderer->imageToBase64($template->logo_path) ?: Storage::url($template->logo_path);
+        }
 
         $sections = $records->map(
             fn (CtiRecord $record) => $renderer->render(

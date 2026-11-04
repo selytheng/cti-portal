@@ -15,6 +15,11 @@ class QueryHubController extends Controller
 {
     public function index(Request $request)
     {
+        $perPage = (int) $request->input('per_page', 20);
+        if (! in_array($perPage, [20, 50, 100, 1000], true)) {
+            $perPage = 20;
+        }
+
         return Inertia::render('QueryHub/Index', [
             'activeQueries' => QueryRun::query()
                 ->with('user:id,name,email')
@@ -26,7 +31,9 @@ class QueryHubController extends Controller
                 ->with('user:id,name')
                 ->whereIn('status', ['completed', 'failed', 'cancelled'])
                 ->latest()
-                ->paginate(15),
+                ->paginate($perPage)
+                ->withQueryString(),
+            'perPage' => $perPage,
             'feeds' => RssFeed::query()->where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'aiIntegrations' => AiIntegration::query()
                 ->where('is_active', true)

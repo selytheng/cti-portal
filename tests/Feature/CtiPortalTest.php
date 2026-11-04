@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\RunIntelligenceQueryJob;
 use App\Models\CtiRecord;
+use App\Models\KeywordRule;
 use App\Models\QueryRun;
 use App\Models\RssFeed;
 use App\Models\User;
@@ -113,7 +114,7 @@ class CtiPortalTest extends TestCase
     {
         Event::fake();
 
-        \App\Models\KeywordRule::create([
+        KeywordRule::create([
             'keyword' => 'gaming', 'match_type' => 'exact', 'rule_type' => 'exception',
             'severity_boost' => 0, 'is_active' => true,
         ]);
@@ -168,5 +169,83 @@ class CtiPortalTest extends TestCase
     public function test_siem_ioc_feed_requires_authentication(): void
     {
         $this->getJson(route('api.iocs'))->assertUnauthorized();
+    }
+
+    public function test_pagination_per_page_options_on_audit_cti_and_query_hub(): void
+    {
+        $this->actingAs($this->superadmin());
+
+        $this->get(route('audit.index', ['per_page' => 50]))
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page->component('Audit/Index')
+                ->where('filters.per_page', 50)
+                ->where('activities.per_page', 50));
+
+        $this->get(route('cti.index', ['per_page' => 100]))
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page->component('CtiRepository/Index')
+                ->where('filters.per_page', 100)
+                ->where('records.per_page', 100));
+
+        $this->get(route('queryhub.index', ['per_page' => 50]))
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page->component('QueryHub/Index')
+                ->where('perPage', 50)
+                ->where('history.per_page', 50));
+    }
+
+    public function test_bulk_status_accepts_not_applicable(): void
+    {
+        $this->actingAs($this->superadmin());
+
+        $record = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-90002',
+            'subject' => 'Test Subject for Status Update',
+            'type' => 'Vul',
+            'severity' => 'Medium',
+            'workflow_status' => 'New',
+            'sources' => [['name' => 'Test', 'url' => 'https://example.com/2']],
+            'published_at' => now(),
+            'modified_at' => now(),
+        ]);
+
+        $this->post(route('cti.bulk-status'), [
+            'ids' => [$record->id],
+            'workflow_status' => 'Not Applicable',
+        ])->assertRedirect();
+
+        $this->assertSame('Not Applicable', $record->fresh()->workflow_status);
+    }
+
+    public function test_report_pdf_returns_json_download_url_and_can_be_downloaded(): void
+    {
+        Event::fake();
+        $this->actingAs($this->superadmin());
+
+        $record = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-90003',
+            'subject' => 'Test PDF Download Subject',
+            'type' => 'Vul',
+            'severity' => 'High',
+            'sources' => [['name' => 'Test', 'url' => 'https://example.com/3']],
+            'published_at' => now(),
+            'modified_at' => now(),
+        ]);
+
+        $response = $this->postJson(route('cti.report-pdf'), [
+            'cti_ids' => [$record->id],
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonStructure(['download_url']);
+
+        $downloadUrl = $response->json('download_url');
+        $this->assertNotEmpty($downloadUrl);
+
+        $downloadResponse = $this->get($downloadUrl);
+        $downloadResponse->assertOk();
+        $this->assertSame('application/pdf', $downloadResponse->headers->get('content-type'));
     }
 }
