@@ -8,6 +8,7 @@ use App\Models\CtiNote;
 use App\Models\CtiRecord;
 use App\Models\CtiReport;
 use App\Models\CtiRevision;
+use App\Models\CtiUserRead;
 use App\Models\CveVerifier;
 use App\Models\ReportTemplate;
 use App\Services\CtiExportService;
@@ -38,9 +39,15 @@ class CtiRepositoryController extends Controller
 
         $driver = DB::getDriverName();
         $ilike = $driver === 'pgsql' ? 'ILIKE' : 'LIKE';
+        $userId = $request->user()?->id;
 
         $records = CtiRecord::query()
             ->with('iocs:ioc_type,value,verdict,cti_record_id')
+            ->leftJoin('cti_user_reads', function ($join) use ($userId) {
+                $join->on('cti_records.id', '=', 'cti_user_reads.cti_record_id')
+                    ->where('cti_user_reads.user_id', '=', $userId);
+            })
+            ->select('cti_records.*', 'cti_user_reads.read_at as user_read_at')
             ->when($request->input('search'), function ($q, $s) use ($driver, $ilike) {
                 $q->where(function ($qq) use ($s, $driver, $ilike) {
                     if ($driver === 'pgsql') {
@@ -66,7 +73,14 @@ class CtiRepositoryController extends Controller
             ->when($request->input('published_to'), fn ($q, $v) => $q->where('published_at', '<=', $v.' 23:59:59'))
             ->when($request->input('modified_from'), fn ($q, $v) => $q->where('modified_at', '>=', $v))
             ->when($request->input('modified_to'), fn ($q, $v) => $q->where('modified_at', '<=', $v.' 23:59:59'))
-            ->orderByDesc('modified_at')
+            ->orderByRaw('CASE
+                WHEN cti_user_reads.read_at IS NULL AND COALESCE(cti_records.revision_count, 1) <= 1 THEN 1
+                WHEN (cti_user_reads.read_at IS NOT NULL AND cti_records.modified_at > cti_user_reads.read_at)
+                     OR (cti_user_reads.read_at IS NULL AND cti_records.revision_count > 1) THEN 2
+                ELSE 3
+            END ASC')
+            ->orderByDesc('cti_records.cti_id')
+            ->orderByDesc('cti_records.id')
             ->paginate($perPage)
             ->withQueryString();
 
@@ -81,8 +95,15 @@ class CtiRepositoryController extends Controller
         ]);
     }
 
-    public function show(CtiRecord $record)
+    public function show(Request $request, CtiRecord $record)
     {
+        if ($request->user()) {
+            CtiUserRead::updateOrCreate(
+                ['user_id' => $request->user()->id, 'cti_record_id' => $record->id],
+                ['read_at' => now()]
+            );
+        }
+
         $record->load([
             'iocs',
             'revisions' => fn ($q) => $q->with('updatedBy:id,name')->latest('created_at'),
@@ -93,6 +114,39 @@ class CtiRepositoryController extends Controller
             'record' => $record,
             'templates' => ReportTemplate::query()->orderBy('name')->get(['id', 'name', 'is_default']),
         ]);
+    }
+
+    public function markAsRead(Request $request, CtiRecord $record)
+    {
+        if ($request->user()) {
+            CtiUserRead::updateOrCreate(
+                ['user_id' => $request->user()->id, 'cti_record_id' => $record->id],
+                ['read_at' => now()]
+            );
+        }
+
+        return back();
+    }
+
+    public function bulkMarkAsRead(Request $request)
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:cti_records,id'],
+        ]);
+
+        $now = now();
+        $records = collect($data['ids'])->map(fn ($id) => [
+            'user_id' => $request->user()->id,
+            'cti_record_id' => $id,
+            'read_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->all();
+
+        CtiUserRead::upsert($records, ['user_id', 'cti_record_id'], ['read_at', 'updated_at']);
+
+        return back()->with('success', count($data['ids']).' CTI record(s) marked as read.');
     }
 
     public function edit(CtiRecord $record)

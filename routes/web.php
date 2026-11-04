@@ -2,8 +2,8 @@
 
 use App\Http\Controllers\AiIntegrationController;
 use App\Http\Controllers\AuditLogController;
-use App\Http\Controllers\CtiRepositoryController;
 use App\Http\Controllers\ConfigurationController;
+use App\Http\Controllers\CtiRepositoryController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FeedController;
 use App\Http\Controllers\IocVerifierController;
@@ -62,6 +62,8 @@ Route::middleware(['auth', 'verified', 'force-password-change', 'require-mfa'])-
     Route::post('/query-hub/{run}/cancel', [QueryHubController::class, 'cancel'])->name('queryhub.cancel');
     // ===== CTI Repository (Phase 4, spec Sections 6–8) =====
     Route::get('/cti-repository', [CtiRepositoryController::class, 'index'])->name('cti.index');
+    Route::post('/cti-repository/bulk-mark-read', [CtiRepositoryController::class, 'bulkMarkAsRead'])->name('cti.bulk-mark-read');
+    Route::post('/cti-repository/{record}/mark-read', [CtiRepositoryController::class, 'markAsRead'])->name('cti.mark-read');
     Route::get('/cti-repository/{record}', [CtiRepositoryController::class, 'show'])->name('cti.show');
     Route::get('/cti-repository/{record}/edit', [CtiRepositoryController::class, 'edit'])->name('cti.edit')->middleware('permission:cti.edit');
     Route::patch('/cti-repository/{record}', [CtiRepositoryController::class, 'update'])->name('cti.update')->middleware('permission:cti.edit');

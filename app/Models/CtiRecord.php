@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -47,6 +48,39 @@ class CtiRecord extends Model
             'detection_rules' => 'array',
             'matched_focus_keywords' => 'array',
         ];
+    }
+
+    protected $appends = [
+        'read_state',
+    ];
+
+    public function userReads(): HasMany
+    {
+        return $this->hasMany(CtiUserRead::class);
+    }
+
+    public function getReadStateAttribute(): string
+    {
+        if (array_key_exists('user_read_at', $this->attributes)) {
+            $readAt = $this->attributes['user_read_at']
+                ? Carbon::parse($this->attributes['user_read_at'])
+                : null;
+        } elseif (auth()->check()) {
+            $readAt = $this->userReads()->where('user_id', auth()->id())->value('read_at');
+            $readAt = $readAt ? Carbon::parse($readAt) : null;
+        } else {
+            $readAt = null;
+        }
+
+        if (! $readAt) {
+            return ($this->revision_count > 1) ? 'Updated' : 'New';
+        }
+
+        if ($this->modified_at && Carbon::parse($this->modified_at)->greaterThan($readAt)) {
+            return 'Updated';
+        }
+
+        return 'Read';
     }
 
     public function iocs(): HasMany

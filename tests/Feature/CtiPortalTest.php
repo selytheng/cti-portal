@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\RunIntelligenceQueryJob;
 use App\Models\CtiRecord;
+use App\Models\CtiUserRead;
 use App\Models\KeywordRule;
 use App\Models\QueryRun;
 use App\Models\RssFeed;
@@ -247,5 +248,132 @@ class CtiPortalTest extends TestCase
         $downloadResponse = $this->get($downloadUrl);
         $downloadResponse->assertOk();
         $this->assertSame('application/pdf', $downloadResponse->headers->get('content-type'));
+    }
+
+    public function test_cti_repository_partitions_new_updated_read_and_sorts_by_cti_id_desc(): void
+    {
+        $superadmin = $this->superadmin();
+        $this->actingAs($superadmin);
+
+        // Record 1: Read (read_at is after modified_at)
+        $readRecord = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-80001',
+            'subject' => 'Read Subject',
+            'type' => 'Vul',
+            'severity' => 'Low',
+            'sources' => [['name' => 'T', 'url' => 'https://example.com/r1']],
+            'published_at' => now()->subDays(5),
+            'modified_at' => now()->subDays(5),
+            'revision_count' => 1,
+        ]);
+        CtiUserRead::create([
+            'user_id' => $superadmin->id,
+            'cti_record_id' => $readRecord->id,
+            'read_at' => now()->subDays(4),
+        ]);
+
+        // Record 2: Updated (has revision_count > 1, or modified after read_at)
+        $updatedRecord = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-80002',
+            'subject' => 'Updated Subject',
+            'type' => 'Vul',
+            'severity' => 'High',
+            'sources' => [['name' => 'T', 'url' => 'https://example.com/r2']],
+            'published_at' => now()->subDays(3),
+            'modified_at' => now()->subHour(),
+            'revision_count' => 2,
+        ]);
+
+        // Record 3: New with lower ID
+        $newRecordA = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-80003',
+            'subject' => 'New Subject A',
+            'type' => 'Vul',
+            'severity' => 'Critical',
+            'sources' => [['name' => 'T', 'url' => 'https://example.com/r3']],
+            'published_at' => now()->subMinutes(30),
+            'modified_at' => now()->subMinutes(30),
+            'revision_count' => 1,
+        ]);
+
+        // Record 4: New with higher ID
+        $newRecordB = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-80004',
+            'subject' => 'New Subject B',
+            'type' => 'Vul',
+            'severity' => 'Critical',
+            'sources' => [['name' => 'T', 'url' => 'https://example.com/r4']],
+            'published_at' => now()->subMinutes(10),
+            'modified_at' => now()->subMinutes(10),
+            'revision_count' => 1,
+        ]);
+
+        $response = $this->get(route('cti.index'))
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page->component('CtiRepository/Index'));
+
+        $records = $response->viewData('page')['props']['records']['data'];
+        $ctiIds = collect($records)->pluck('cti_id')->all();
+
+        // New records should come first, ordered CTI ID DESC: 80004, 80003
+        // Then Updated: 80002
+        // Then Read: 80001
+        $this->assertSame('CTI-'.now()->year.'-80004', $ctiIds[0]);
+        $this->assertSame('CTI-'.now()->year.'-80003', $ctiIds[1]);
+        $this->assertSame('CTI-'.now()->year.'-80002', $ctiIds[2]);
+        $this->assertSame('CTI-'.now()->year.'-80001', $ctiIds[3]);
+
+        $this->assertSame('New', $records[0]['read_state']);
+        $this->assertSame('New', $records[1]['read_state']);
+        $this->assertSame('Updated', $records[2]['read_state']);
+        $this->assertSame('Read', $records[3]['read_state']);
+    }
+
+    public function test_cti_single_and_bulk_mark_as_read(): void
+    {
+        $superadmin = $this->superadmin();
+        $this->actingAs($superadmin);
+
+        $record1 = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-80010',
+            'subject' => 'Mark Read Test 1',
+            'type' => 'Vul',
+            'severity' => 'Medium',
+            'sources' => [['name' => 'T', 'url' => 'https://example.com/m1']],
+            'published_at' => now(),
+            'modified_at' => now(),
+            'revision_count' => 1,
+        ]);
+
+        $record2 = CtiRecord::create([
+            'uuid' => (string) Str::uuid(),
+            'cti_id' => 'CTI-'.now()->year.'-80011',
+            'subject' => 'Mark Read Test 2',
+            'type' => 'Vul',
+            'severity' => 'Medium',
+            'sources' => [['name' => 'T', 'url' => 'https://example.com/m2']],
+            'published_at' => now(),
+            'modified_at' => now(),
+            'revision_count' => 1,
+        ]);
+
+        // Single mark as read
+        $this->post(route('cti.mark-read', $record1->id))->assertRedirect();
+        $this->assertDatabaseHas('cti_user_reads', [
+            'user_id' => $superadmin->id,
+            'cti_record_id' => $record1->id,
+        ]);
+
+        // Bulk mark as read
+        $this->post(route('cti.bulk-mark-read'), ['ids' => [$record2->id]])->assertRedirect();
+        $this->assertDatabaseHas('cti_user_reads', [
+            'user_id' => $superadmin->id,
+            'cti_record_id' => $record2->id,
+        ]);
     }
 }

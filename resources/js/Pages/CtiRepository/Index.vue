@@ -51,6 +51,11 @@ const activeFilterCount = computed(() => {
     return count;
 });
 
+function isFirstOfPartition(index) {
+    if (index === 0) return true;
+    return list.value[index]?.read_state !== list.value[index - 1]?.read_state;
+}
+
 function applyFilters() {
     router.get(route('cti.index'), { ...filters.value }, { preserveState: true });
 }
@@ -87,6 +92,31 @@ function confirmBulkStatus() {
                 showStatusModal.value = false;
             },
         }
+    );
+}
+
+function bulkMarkAsRead() {
+    if (!selected.value.length) return;
+    router.post(
+        route('cti.bulk-mark-read'),
+        { ids: selected.value },
+        {
+            preserveState: true,
+            preserveScroll: true,
+            onSuccess: () => (selected.value = []),
+        }
+    );
+}
+
+function viewRecord(record) {
+    router.get(route('cti.show', record.id));
+}
+
+function markSingleRead(record) {
+    router.post(
+        route('cti.mark-read', record.id),
+        {},
+        { preserveState: true, preserveScroll: true }
     );
 }
 
@@ -127,10 +157,6 @@ function sevClass(sev) {
         Low: 'bg-blue-500/20 text-blue-600 dark:text-blue-400',
         Informational: 'bg-slate-500/20 text-slate-500',
     }[sev] ?? 'bg-gray-500/20 text-gray-500';
-}
-
-function isRecentlyUpdated(r) {
-    return r.modified_at && r.created_at && new Date(r.modified_at) > new Date(r.created_at);
 }
 </script>
 
@@ -233,6 +259,7 @@ function isRecentlyUpdated(r) {
                 >
                     <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ selected.length }} selected</span>
                     <SecondaryButton type="button" @click="openBulkStatusModal">Set status</SecondaryButton>
+                    <SecondaryButton type="button" @click="bulkMarkAsRead">Mark all as read</SecondaryButton>
                     <SecondaryButton type="button" @click="exportCsv">Export CSV</SecondaryButton>
                     <SecondaryButton type="button" @click="exportStix">Export STIX 2.1</SecondaryButton>
                     <SecondaryButton type="button" @click="quickReport(selected)">Consolidated Report</SecondaryButton>
@@ -258,37 +285,87 @@ function isRecentlyUpdated(r) {
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                                <tr v-for="record in list" :key="record.id" class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <td class="px-4 py-3">
-                                        <input type="checkbox" :checked="selected.includes(record.id)" @change="toggleRow(record.id)" class="rounded" />
-                                    </td>
-                                    <td class="px-4 py-3 font-mono text-gray-600 dark:text-gray-300">{{ record.cti_id }}</td>
-                                    <td class="max-w-sm px-4 py-3">
-                                        <div class="flex items-center gap-2">
-                                            <span class="font-medium text-gray-800 dark:text-gray-200">{{ record.subject }}</span>
-                                            <span v-if="isRecentlyUpdated(record)" class="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">Recently Updated</span>
-                                            <span v-if="record.is_developing" class="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400">Developing</span>
-                                        </div>
-                                        <div v-if="(record.matched_focus_keywords ?? []).length" class="mt-1 flex flex-wrap gap-1">
-                                            <span v-for="kw in record.matched_focus_keywords" :key="kw" class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-xs text-indigo-600 dark:text-indigo-400">{{ kw }}</span>
-                                        </div>
-                                    </td>
-                                    <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ record.type }}</td>
-                                    <td class="px-4 py-3">
-                                        <span :class="['rounded-full px-2 py-0.5 text-xs font-semibold', sevClass(record.severity)]">{{ record.severity }}</span>
-                                    </td>
-                                    <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{{ record.tlp }}</td>
-                                    <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ record.workflow_status }}</td>
-                                    <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ (record.iocs ?? []).length }}</td>
-                                    <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{{ fmt(record.modified_at) }}</td>
-                                    <td class="px-4 py-3">
-                                        <div class="flex gap-2">
-                                            <button type="button" @click="router.get(route('cti.show', record.id))" class="text-indigo-600 hover:underline dark:text-indigo-400">View</button>
-                                            <button type="button" @click="quickReport([record.id])" class="text-gray-600 hover:underline dark:text-gray-300">Report</button>
-                                            <button type="button" @click="destroy(record)" class="text-red-600 hover:underline dark:text-red-400">Delete</button>
-                                        </div>
-                                    </td>
-                                </tr>
+                                <template v-for="(record, index) in list" :key="record.id">
+                                    <!-- Partition divider header -->
+                                    <tr
+                                        v-if="isFirstOfPartition(index)"
+                                        class="bg-gray-50/80 dark:bg-gray-900/80"
+                                    >
+                                        <td colspan="10" class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider">
+                                            <span v-if="record.read_state === 'New'" class="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                                                <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                                New Intelligence
+                                            </span>
+                                            <span v-else-if="record.read_state === 'Updated'" class="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                                                <span class="h-2 w-2 rounded-full bg-amber-500"></span>
+                                                Updated Intelligence
+                                            </span>
+                                            <span v-else class="inline-flex items-center gap-1.5 text-gray-500 dark:text-gray-400">
+                                                <span class="h-2 w-2 rounded-full bg-gray-400"></span>
+                                                Read Intelligence
+                                            </span>
+                                        </td>
+                                    </tr>
+
+                                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                        <td class="px-4 py-3">
+                                            <input type="checkbox" :checked="selected.includes(record.id)" @change="toggleRow(record.id)" class="rounded" />
+                                        </td>
+                                        <td class="px-4 py-3 font-mono text-gray-600 dark:text-gray-300">{{ record.cti_id }}</td>
+                                        <td class="max-w-md px-4 py-3">
+                                            <div class="space-y-1">
+                                                <div class="flex items-start justify-between gap-2">
+                                                    <button
+                                                        type="button"
+                                                        @click="viewRecord(record)"
+                                                        class="text-left font-medium text-gray-800 hover:text-indigo-600 hover:underline dark:text-gray-200 dark:hover:text-indigo-400"
+                                                    >
+                                                        {{ record.subject }}
+                                                    </button>
+                                                    <button
+                                                        v-if="record.read_state === 'New'"
+                                                        type="button"
+                                                        @click.stop="markSingleRead(record)"
+                                                        title="New CTI — click to mark as read"
+                                                        class="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-600 hover:bg-emerald-500/25 dark:bg-emerald-500/20 dark:text-emerald-400"
+                                                    >
+                                                        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                                        New
+                                                    </button>
+                                                    <button
+                                                        v-else-if="record.read_state === 'Updated'"
+                                                        type="button"
+                                                        @click.stop="markSingleRead(record)"
+                                                        title="Updated with new intelligence — click to mark as read"
+                                                        class="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-600 hover:bg-amber-500/25 dark:bg-amber-500/20 dark:text-amber-400"
+                                                    >
+                                                        <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                                                        Updated
+                                                    </button>
+                                                </div>
+                                                <div class="flex flex-wrap items-center gap-1.5">
+                                                    <span v-if="record.is_developing" class="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400">Developing</span>
+                                                    <span v-for="kw in (record.matched_focus_keywords ?? [])" :key="kw" class="rounded-full bg-indigo-500/15 px-2 py-0.5 text-xs text-indigo-600 dark:text-indigo-400">{{ kw }}</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ record.type }}</td>
+                                        <td class="px-4 py-3">
+                                            <span :class="['rounded-full px-2 py-0.5 text-xs font-semibold', sevClass(record.severity)]">{{ record.severity }}</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{{ record.tlp }}</td>
+                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ record.workflow_status }}</td>
+                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ (record.iocs ?? []).length }}</td>
+                                        <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{{ fmt(record.modified_at) }}</td>
+                                        <td class="px-4 py-3">
+                                            <div class="flex gap-2">
+                                                <button type="button" @click="viewRecord(record)" class="text-indigo-600 hover:underline dark:text-indigo-400">View</button>
+                                                <button type="button" @click="quickReport([record.id])" class="text-gray-600 hover:underline dark:text-gray-300">Report</button>
+                                                <button type="button" @click="destroy(record)" class="text-red-600 hover:underline dark:text-red-400">Delete</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </template>
                                 <tr v-if="list.length === 0">
                                     <td colspan="10" class="px-4 py-8 text-center text-gray-500 dark:text-gray-400">No CTI records match these filters.</td>
                                 </tr>
