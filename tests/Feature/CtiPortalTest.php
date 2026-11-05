@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\RunIntelligenceQueryJob;
+use App\Models\AiIntegration;
 use App\Models\CtiRecord;
 use App\Models\CtiUserRead;
 use App\Models\KeywordRule;
@@ -19,7 +20,11 @@ class CtiPortalTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected bool $seed = true;
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed();
+    }
 
     private function superadmin(): User
     {
@@ -440,5 +445,48 @@ class CtiPortalTest extends TestCase
             'query_run_id' => $run->id,
             'source_url' => 'https://example.com/mitre-test',
         ]);
+    }
+
+    public function test_pipeline_does_not_add_to_database_if_ai_fails_to_analyze(): void
+    {
+        Event::fake();
+
+        $this->fakeFeed([
+            [
+                'title' => 'Article that fails AI analysis',
+                'link' => 'https://example.com/ai-fail',
+                'pubDate' => now()->toRfc2822String(),
+            ],
+        ]);
+
+        $feed = RssFeed::create([
+            'name' => 'Failing Feed', 'url' => 'https://example.com/feed.xml',
+            'category' => 'Security Blog', 'polling_interval_minutes' => 30, 'is_active' => true,
+        ]);
+
+        $ai = AiIntegration::create([
+            'provider' => 'openai',
+            'name' => 'Failing Provider',
+            'model_id' => 'gpt-4o',
+            'api_key' => 'invalid-key',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
+
+        $run = QueryRun::create([
+            'uuid' => (string) Str::uuid(), 'trigger_type' => 'manual',
+            'lookback_days' => 7, 'use_keywords' => false, 'match_existing' => true,
+            'ai_integration_id' => $ai->id,
+            'feed_ids' => [$feed->id], 'status' => 'queued',
+        ]);
+
+        RunIntelligenceQueryJob::dispatchSync($run);
+
+        // Crucial verification: Since AI analysis failed, it must NOT add to database!
+        $this->assertDatabaseMissing('cti_records', [
+            'subject' => 'Article that fails AI analysis',
+        ]);
+        $run->refresh();
+        $this->assertSame(0, $run->ctis_created);
     }
 }

@@ -133,24 +133,10 @@ class RunIntelligenceQueryJob implements ShouldQueue
                     $kw = ['matchedFocus' => [], 'boost' => 0];
                 }
 
-                $extracted = $extractor->extract(
-                    $item['title'] ?? 'Untitled',
-                    $url,
-                    $feed->name,
-                    $published?->toIso8601String(),
-                    $ai,
-                    $item['description'] ?? ''
-                );
-                $data = $extracted['data'];
+                // Step 2: Then Read the RSS News (fetch article text / content from web or RSS description)
+                $newsContent = $extractor->fetchContent($url, $item['description'] ?? '');
 
-                // Prioritize & highlight mode: focus matches boost severity.
-                if ($kw['boost'] > 0 && $kw['matchedFocus'] !== []) {
-                    $sevOrder = array_values(CtiRecord::SEVERITIES);
-                    $idx = array_search($data['severity'], $sevOrder, true);
-                    $data['severity'] = $sevOrder[max(0, ($idx === false ? 4 : $idx) - $kw['boost'])];
-                }
-
-                // Stage 1 — same-URL content update detection (spec 8.1).
+                // Step 3: Read the internal database if there are match or updated
                 $existing = $correlator->findBySourceUrl($url);
 
                 if ($existing) {
@@ -162,10 +148,68 @@ class RunIntelligenceQueryJob implements ShouldQueue
                         continue;
                     }
                 } elseif ($run->match_existing) {
-                    // Stage 2/3 — cross-source candidate matching + AI merge decision within lookback window.
+                    // Extract preliminary CVEs / indicators from title and news snippet to find candidates in database
+                    preg_match_all('/CVE-\d{4}-\d{4,}/i', ($item['title'] ?? '').' '.substr($newsContent, 0, 1500), $cveMatches);
+                    $prelimCves = collect($cveMatches[0] ?? [])->unique()->map(fn ($c) => ['cve' => strtoupper($c)])->values()->all();
+
+                    $candidates = $correlator->findCandidates(
+                        $prelimCves,
+                        [],
+                        $item['title'] ?? '',
+                        $run->match_lookback_days ?: 7
+                    );
+
+                    foreach ($candidates as $candidate) {
+                        $candCves = collect($candidate->cves ?? [])->pluck('cve')->map('strtoupper');
+                        $artCves = collect($prelimCves)->pluck('cve')->map('strtoupper');
+
+                        if ($candCves->intersect($artCves)->isNotEmpty()) {
+                            $existing = $candidate;
+
+                            break;
+                        }
+
+                        similar_text(mb_strtolower($candidate->subject), mb_strtolower($item['title'] ?? ''), $simPercent);
+                        if ($simPercent > 65) {
+                            $existing = $candidate;
+
+                            break;
+                        }
+                    }
+                }
+
+                // Step 4: Analyze the information via AI (passing existing record context if matched)
+                $extracted = $extractor->extract(
+                    $item['title'] ?? 'Untitled',
+                    $url,
+                    $feed->name,
+                    $published?->toIso8601String(),
+                    $ai,
+                    $item['description'] ?? '',
+                    $existing
+                );
+
+                // DO NOT store in the database unless the AI has already analyzed it!
+                if (! ($extracted['extracted'] ?? false)) {
+                    $run->increment('duplicates_skipped');
+
+                    continue;
+                }
+
+                $data = $extracted['data'];
+
+                // Prioritize & highlight mode: focus matches boost severity.
+                if ($kw['boost'] > 0 && $kw['matchedFocus'] !== []) {
+                    $sevOrder = array_values(CtiRecord::SEVERITIES);
+                    $idx = array_search($data['severity'], $sevOrder, true);
+                    $data['severity'] = $sevOrder[max(0, ($idx === false ? 4 : $idx) - $kw['boost'])];
+                }
+
+                // If not matched prior, check if extracted CVEs match an existing record
+                if (! $existing && $run->match_existing && ! empty($data['cves'])) {
                     $candidates = $correlator->findCandidates(
                         $data['cves'],
-                        $data['iocs'],
+                        $data['iocs'] ?? [],
                         $data['subject'],
                         $run->match_lookback_days ?: 7
                     );
@@ -187,6 +231,7 @@ class RunIntelligenceQueryJob implements ShouldQueue
                     'content_hash' => $contentHash,
                 ];
 
+                // Step 5: Put/update detail into database
                 if ($existing) {
                     $merged = $correlator->merge($existing, $data, $source, $run);
 
@@ -202,6 +247,8 @@ class RunIntelligenceQueryJob implements ShouldQueue
                     $createdIds[] = $record->id;
                     $run->increment('ctis_created');
                 }
+
+                usleep(300000);
             }
 
             $run->increment('feeds_processed');
