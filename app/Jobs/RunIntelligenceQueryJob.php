@@ -3,8 +3,10 @@
 namespace App\Jobs;
 
 use App\Events\QueryProgressEvent;
+use App\Models\AiIntegration;
 use App\Models\CtiIoc;
 use App\Models\CtiRecord;
+use App\Models\CtiRevision;
 use App\Models\CveVerifier;
 use App\Models\QueryRun;
 use App\Models\RssFeed;
@@ -20,6 +22,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -39,9 +42,7 @@ class RunIntelligenceQueryJob implements ShouldQueue
 
     public int $timeout = 3600;
 
-    public function __construct(public QueryRun $run)
-    {
-    }
+    public function __construct(public QueryRun $run) {}
 
     public function handle(FeedParser $parser, IocCheckService $iocCheck, StoryCorrelator $correlator, CveVerifierService $cveService): void
     {
@@ -62,7 +63,7 @@ class RunIntelligenceQueryJob implements ShouldQueue
         $matcher = KeywordMatcher::fromDatabase();
         $extractor = app(CtiExtractor::class);
         $ai = $run->ai_integration_id
-            ? $extractor->defaultIntegration()?->find($run->ai_integration_id) ?? null
+            ? AiIntegration::where('is_active', true)->find($run->ai_integration_id)
             : $extractor->defaultIntegration();
 
         if ($ai) {
@@ -137,7 +138,8 @@ class RunIntelligenceQueryJob implements ShouldQueue
                     $url,
                     $feed->name,
                     $published?->toIso8601String(),
-                    $ai
+                    $ai,
+                    $item['description'] ?? ''
                 );
                 $data = $extracted['data'];
 
@@ -160,8 +162,13 @@ class RunIntelligenceQueryJob implements ShouldQueue
                         continue;
                     }
                 } elseif ($run->match_existing) {
-                    // Stage 2/3 — cross-source candidate matching + AI merge decision.
-                    $candidates = $correlator->findCandidates($data['cves'], $data['iocs'], $data['subject']);
+                    // Stage 2/3 — cross-source candidate matching + AI merge decision within lookback window.
+                    $candidates = $correlator->findCandidates(
+                        $data['cves'],
+                        $data['iocs'],
+                        $data['subject'],
+                        $run->match_lookback_days ?: 7
+                    );
 
                     foreach ($candidates as $candidate) {
                         if ($correlator->shouldMerge($candidate, $data, $ai)) {
@@ -233,10 +240,14 @@ class RunIntelligenceQueryJob implements ShouldQueue
             $verifier = CveVerifier::query()->where('service', 'nvd')->first();
 
             if ($verifier) {
-                CtiRecord::query()
-                    ->whereIn('id', $targetIds)
-                    ->whereRaw("jsonb_array_length(coalesce(cves, '[]'::jsonb)) > 0")
-                    ->each(fn (CtiRecord $record) => $cveService->verifyRecord($record, $verifier));
+                $driver = DB::getDriverName();
+                $cveQuery = CtiRecord::query()->whereIn('id', $targetIds);
+                if ($driver === 'pgsql') {
+                    $cveQuery->whereRaw("jsonb_array_length(coalesce(cves, '[]'::jsonb)) > 0");
+                } else {
+                    $cveQuery->whereNotNull('cves')->where('cves', '!=', '[]');
+                }
+                $cveQuery->each(fn (CtiRecord $record) => $cveService->verifyRecord($record, $verifier));
             }
         }
 
@@ -309,9 +320,33 @@ class RunIntelligenceQueryJob implements ShouldQueue
             'impact_software' => $data['impact_software'] ?: null,
             'threat_actors' => $data['threat_actors'] ?: null,
             'target_objects' => $data['target_objects'] ?: null,
+            'mitre_attack' => $data['mitre_attack'] ?: null,
             'mitigation' => $data['mitigation'],
             'matched_focus_keywords' => $focusKeywords ?: null,
             'latest_query_run_id' => $run->id,
+        ]);
+
+        CtiRevision::create([
+            'cti_record_id' => $record->id,
+            'query_run_id' => $run->id,
+            'source_url' => $item['url'] ?? null,
+            'fields_updated' => array_values(array_filter([
+                'subject', 'summary', 'technical_analysis', 'mitigation',
+                ! empty($data['cves']) ? 'cves' : null,
+                ! empty($data['iocs']) ? 'iocs' : null,
+                ! empty($data['threat_actors']) ? 'threat_actors' : null,
+                ! empty($data['target_objects']) ? 'target_objects' : null,
+                ! empty($data['impact_hardware']) ? 'impact_hardware' : null,
+                ! empty($data['impact_software']) ? 'impact_software' : null,
+                ! empty($data['mitre_attack']) ? 'mitre_attack' : null,
+                'sources',
+            ])),
+            'previous_values' => null,
+            'new_values' => $record->only([
+                'subject', 'severity', 'cves', 'threat_actors', 'target_objects',
+                'impact_hardware', 'impact_software', 'mitre_attack', 'mitigation', 'summary',
+            ]),
+            'created_at' => now(),
         ]);
 
         foreach ($data['iocs'] ?? [] as $ioc) {

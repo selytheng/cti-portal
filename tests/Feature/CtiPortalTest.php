@@ -376,4 +376,69 @@ class CtiPortalTest extends TestCase
             'cti_record_id' => $record2->id,
         ]);
     }
+
+    public function test_query_hub_store_accepts_match_lookback_days(): void
+    {
+        $this->actingAs($this->superadmin());
+
+        $feed = RssFeed::create([
+            'name' => 'Lookback Feed', 'url' => 'https://example.com/feed.xml',
+            'category' => 'Security Blog', 'polling_interval_minutes' => 30, 'is_active' => true,
+        ]);
+
+        $response = $this->post(route('queryhub.store'), [
+            'lookback_days' => 1,
+            'feed_ids' => [$feed->id],
+            'use_keywords' => true,
+            'match_existing' => true,
+            'match_lookback_days' => 30,
+        ]);
+
+        $response->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('query_runs', [
+            'lookback_days' => 1,
+            'match_existing' => true,
+            'match_lookback_days' => 30,
+        ]);
+    }
+
+    public function test_query_pipeline_saves_all_repository_fields_including_mitre_and_revisions(): void
+    {
+        Event::fake();
+
+        $this->fakeFeed([
+            [
+                'title' => 'Critical Flaw Exploit CVE-2026-8888',
+                'link' => 'https://example.com/mitre-test',
+                'pubDate' => now()->toRfc2822String(),
+            ],
+        ]);
+
+        $feed = RssFeed::create([
+            'name' => 'Security Feed', 'url' => 'https://example.com/feed.xml',
+            'category' => 'Security Blog', 'polling_interval_minutes' => 30, 'is_active' => true,
+        ]);
+
+        $run = QueryRun::create([
+            'uuid' => (string) Str::uuid(), 'trigger_type' => 'manual',
+            'lookback_days' => 7, 'use_keywords' => false, 'match_existing' => true,
+            'match_lookback_days' => 7,
+            'feed_ids' => [$feed->id], 'status' => 'queued',
+        ]);
+
+        RunIntelligenceQueryJob::dispatchSync($run);
+
+        $record = CtiRecord::where('subject', 'like', '%CVE-2026-8888%')->first();
+        $this->assertNotNull($record);
+        $this->assertNotEmpty($record->summary);
+        $this->assertNotEmpty($record->sources);
+        $this->assertGreaterThanOrEqual(1, $record->revision_count);
+
+        // Enrichment & Revision Timeline initial entry (Rev 1)
+        $this->assertDatabaseHas('cti_revisions', [
+            'cti_record_id' => $record->id,
+            'query_run_id' => $run->id,
+            'source_url' => 'https://example.com/mitre-test',
+        ]);
+    }
 }

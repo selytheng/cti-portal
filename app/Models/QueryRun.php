@@ -14,6 +14,7 @@ class QueryRun extends Model
 
     protected $fillable = [
         'uuid', 'triggered_by_user_id', 'trigger_type', 'lookback_days', 'feed_ids',
+        'use_keywords', 'match_existing', 'match_lookback_days', 'ai_integration_id',
         'status', 'current_stage', 'progress_percent', 'feeds_processed',
         'items_fetched', 'items_in_date_window', 'items_filtered_exception',
         'duplicates_skipped', 'ctis_created', 'ctis_updated',
@@ -28,6 +29,9 @@ class QueryRun extends Model
             'created_cti_ids' => 'array',
             'updated_cti_ids' => 'array',
             'lookback_days' => 'integer',
+            'match_existing' => 'boolean',
+            'match_lookback_days' => 'integer',
+            'use_keywords' => 'boolean',
             'progress_percent' => 'integer',
             'feeds_processed' => 'integer',
             'items_fetched' => 'integer',

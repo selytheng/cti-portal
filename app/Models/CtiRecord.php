@@ -26,7 +26,7 @@ class CtiRecord extends Model
         'published_at', 'modified_at', 'is_developing', 'revision_count',
         'tlp', 'workflow_status', 'confidence_score', 'cves', 'exploit_status',
         'severity', 'summary', 'technical_analysis', 'impact_hardware',
-        'impact_software', 'threat_actors', 'target_objects', 'mitigation',
+        'impact_software', 'threat_actors', 'target_objects', 'mitre_attack', 'mitigation',
         'detection_rules', 'matched_focus_keywords', 'latest_query_run_id',
     ];
 
@@ -45,6 +45,7 @@ class CtiRecord extends Model
             'impact_software' => 'array',
             'threat_actors' => 'array',
             'target_objects' => 'array',
+            'mitre_attack' => 'array',
             'detection_rules' => 'array',
             'matched_focus_keywords' => 'array',
         ];

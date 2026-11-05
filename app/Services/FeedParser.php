@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -43,10 +44,12 @@ class FeedParser
         $items = [];
 
         foreach ($root?->channel?->item ?? [] as $item) {
+            $content = (string) ($item->children('content', true)->encoded ?? $item->description ?? '');
             $items[] = [
                 'title' => (string) $item->title,
                 'url' => (string) $item->link,
                 'published_at' => $this->normalizeDate((string) $item->pubDate),
+                'description' => trim(strip_tags($content)),
             ];
         }
 
@@ -63,11 +66,13 @@ class FeedParser
             foreach ($entry->link ?? [] as $l) {
                 $link ??= (string) $l['href'];
             }
+            $content = (string) ($entry->content ?? $entry->summary ?? '');
 
             $items[] = [
                 'title' => (string) $entry->title,
                 'url' => $link,
                 'published_at' => $this->normalizeDate((string) ($entry->published ?: $entry->updated)),
+                'description' => trim(strip_tags($content)),
             ];
         }
 
@@ -94,8 +99,9 @@ class FeedParser
 
                     return [
                         'title' => ($cve['id'] ?? 'CVE').Str::limit(' — '.$summary, 90),
-                        'url' => "https://nvd.nist.gov/vuln/detail/".($cve['id'] ?? ''),
+                        'url' => 'https://nvd.nist.gov/vuln/detail/'.($cve['id'] ?? ''),
                         'published_at' => $cve['published'] ?? null,
+                        'description' => trim((string) $summary),
                     ];
                 })
                 ->take(10)
@@ -112,6 +118,7 @@ class FeedParser
                 'title' => (string) ($item['title'] ?? $item['name'] ?? $item['id'] ?? ''),
                 'url' => $item['url'] ?? $item['link'] ?? null,
                 'published_at' => $item['published_at'] ?? $item['published'] ?? $item['date'] ?? null,
+                'description' => trim((string) ($item['summary'] ?? $item['description'] ?? $item['content'] ?? '')),
             ])
             ->filter(fn (array $item) => $item['title'] !== '')
             ->take(10)
@@ -126,7 +133,7 @@ class FeedParser
         }
 
         try {
-            return \Carbon\Carbon::parse($value)->toIso8601String();
+            return Carbon::parse($value)->toIso8601String();
         } catch (\Throwable) {
             return $value;
         }

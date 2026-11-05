@@ -58,6 +58,7 @@ class QueryHubController extends Controller
             'use_keywords' => ['required', 'boolean'],
             'ai_integration_id' => ['nullable', 'exists:ai_integrations,id'],
             'match_existing' => ['required', 'boolean'],
+            'match_lookback_days' => ['nullable', 'integer', 'in:1,7,30'],
         ]);
 
         $run = QueryRun::create([
@@ -69,6 +70,7 @@ class QueryHubController extends Controller
             'use_keywords' => $data['use_keywords'],
             'ai_integration_id' => $data['ai_integration_id'] ?? null,
             'match_existing' => $data['match_existing'],
+            'match_lookback_days' => $data['match_lookback_days'] ?? 7,
             'status' => 'queued',
         ]);
 

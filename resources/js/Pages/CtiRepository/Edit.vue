@@ -13,6 +13,15 @@ const props = defineProps({ record: Object });
 
 const lines = (arr) => (arr ?? []).join('\n');
 const toLines = (v) => String(v ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+const mitreLines = (arr) => (arr ?? []).map((m) => typeof m === 'string' ? m : `${m.id || ''} | ${m.name || ''} | ${m.tactic || ''}`.replace(/\|\s*\|\s*$/, '').trim()).join('\n');
+const toMitre = (v) => String(v ?? '').split('\n').map((s) => s.trim()).filter(Boolean).map((line) => {
+    const parts = line.split('|').map((p) => p.trim());
+    return {
+        id: parts[0] ?? '',
+        name: parts[1] ?? '',
+        tactic: parts[2] ?? '',
+    };
+});
 
 const form = useForm({
     subject: props.record.subject,
@@ -30,6 +39,7 @@ const form = useForm({
     impact_software: lines(props.record.impact_software),
     threat_actors: lines(props.record.threat_actors),
     target_objects: lines(props.record.target_objects),
+    mitre_attack: mitreLines(props.record.mitre_attack),
 });
 
 // New IOC rows pending add (spec 7 editor).
@@ -54,6 +64,7 @@ function save() {
         impact_software: toLines(data.impact_software),
         threat_actors: toLines(data.threat_actors),
         target_objects: toLines(data.target_objects),
+        mitre_attack: toMitre(data.mitre_attack),
         exploit_status: data.exploit_status || null,
         iocs_add: pendingIocs.value,
     })).patch(route('cti.update', props.record.id));
@@ -176,6 +187,11 @@ function cancel() {
                             <InputLabel value="Targets (one per line)" />
                             <textarea v-model="form.target_objects" rows="3" class="mt-1 block w-full rounded-md border-gray-300 font-mono text-xs dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300" />
                         </div>
+                    </div>
+
+                    <div>
+                        <InputLabel value="MITRE ATT&CK (one per line, format: ID | Technique Name | Tactic, e.g. T1190 | Exploit Public-Facing Application | Initial Access)" />
+                        <textarea v-model="form.mitre_attack" rows="3" class="mt-1 block w-full rounded-md border-gray-300 font-mono text-xs dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300" />
                     </div>
 
                     <div class="flex justify-end gap-2">

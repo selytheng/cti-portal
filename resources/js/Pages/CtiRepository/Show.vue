@@ -57,6 +57,7 @@ function buildPayload(overrides = {}) {
         impact_software: record.impact_software ?? [],
         threat_actors: record.threat_actors ?? [],
         target_objects: record.target_objects ?? [],
+        mitre_attack: record.mitre_attack ?? [],
         ...overrides,
     };
 }
@@ -378,8 +379,33 @@ const revisedAgo = computed(() => {
                         <div class="flex flex-wrap gap-1"><span v-for="t in record.target_objects ?? []" :key="t" class="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300">{{ t }}</span><span v-if="(record.target_objects ?? []).length === 0" class="text-sm text-gray-500">—</span></div>
                     </div>
                     <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                        <h3 class="mb-2 font-semibold text-gray-800 dark:text-gray-200">MITRE ATT&amp;CK</h3>
-                        <p class="text-sm text-gray-500 dark:text-gray-400">ATT&amp;CK technique mapping arrives with the enrichment pipeline upgrade (AI extraction output).</p>
+                        <h3 class="mb-3 font-semibold text-gray-800 dark:text-gray-200">MITRE ATT&amp;CK</h3>
+                        <div v-if="(record.mitre_attack ?? []).length > 0" class="overflow-hidden rounded-md border border-gray-200 dark:border-gray-700">
+                            <table class="min-w-full text-sm">
+                                <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                                    <tr>
+                                        <th class="px-4 py-2">Technique ID</th>
+                                        <th class="px-4 py-2">Technique Name</th>
+                                        <th class="px-4 py-2">Tactic</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                                    <tr v-for="t in record.mitre_attack" :key="t.id">
+                                        <td class="px-4 py-2 font-mono text-xs">
+                                            <a :href="'https://attack.mitre.org/techniques/' + (t.id ? t.id.replace('.', '/') : '')" target="_blank" rel="noopener" class="text-indigo-600 hover:underline dark:text-indigo-400">
+                                                {{ t.id }}
+                                            </a>
+                                        </td>
+                                        <td class="px-4 py-2 text-gray-800 dark:text-gray-200">{{ t.name || '—' }}</td>
+                                        <td class="px-4 py-2 text-gray-600 dark:text-gray-300">
+                                            <span v-if="t.tactic" class="rounded bg-indigo-500/10 px-2 py-0.5 text-xs text-indigo-600 dark:text-indigo-400">{{ t.tactic }}</span>
+                                            <span v-else class="text-gray-400">—</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p v-else class="text-sm text-gray-500 dark:text-gray-400">No MITRE ATT&amp;CK techniques identified.</p>
                     </div>
                 </div>
 

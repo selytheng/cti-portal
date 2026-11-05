@@ -46,24 +46,37 @@ class StoryCorrelator
             ->first();
     }
 
-    /** Stage 2 — candidate records: same CVE, same IOC, or similar subject. */
-    public function findCandidates(array $cves, array $iocs, string $subject): Collection
+    /** Stage 2 — candidate records: same CVE, same IOC, or similar subject within the lookback window. */
+    public function findCandidates(array $cves, array $iocs, string $subject, int $lookbackDays = 7): Collection
     {
+        $driver = DB::getDriverName();
         $cveIds = collect($cves)->pluck('cve')->filter()->values();
         $iocValues = collect($iocs)->pluck('value')->filter()->values();
+        $since = now()->subDays($lookbackDays);
 
         return CtiRecord::query()
-            ->where('created_at', '>=', now()->subDays(60))
-            ->where(function ($q) use ($cveIds, $iocValues, $subject) {
+            ->where(function ($q) use ($since) {
+                $q->where('modified_at', '>=', $since)
+                    ->orWhere('created_at', '>=', $since);
+            })
+            ->where(function ($q) use ($cveIds, $iocValues, $subject, $driver) {
                 foreach ($cveIds as $cve) {
-                    $q->orWhereRaw('cves::text ILIKE ?', ['%'.$cve.'%']);
+                    if ($driver === 'pgsql') {
+                        $q->orWhereRaw('cves::text ILIKE ?', ['%'.$cve.'%']);
+                    } else {
+                        $q->orWhere('cves', 'like', '%'.$cve.'%');
+                    }
                 }
 
                 if ($iocValues->isNotEmpty()) {
                     $q->orWhereHas('iocs', fn ($iq) => $iq->whereIn('value', $iocValues->all()));
                 }
 
-                $q->orWhereRaw('subject % ?', [$subject]);
+                if ($driver === 'pgsql') {
+                    $q->orWhereRaw('subject % ?', [$subject]);
+                } else {
+                    $q->orWhere('subject', 'like', '%'.$subject.'%');
+                }
             })
             ->orderByDesc('updated_at')
             ->limit(5)
@@ -114,12 +127,13 @@ class StoryCorrelator
      */
     public function merge(CtiRecord $record, array $articleData, array $source, QueryRun $run): bool
     {
-        $before = $record->only(['subject', 'severity', 'cves', 'threat_actors', 'mitigation', 'summary']);
+        $trackFields = ['subject', 'severity', 'cves', 'threat_actors', 'target_objects', 'impact_hardware', 'impact_software', 'mitre_attack', 'mitigation', 'summary'];
+        $before = $record->only($trackFields);
         $fieldsUpdated = [];
 
         // Multi-value fields: append + deduplicate.
-        $listFields = ['cves', 'threat_actors', 'target_objects', 'impact_hardware', 'impact_software'];
-        $keyOf = fn ($item) => is_array($item) ? ($item['cve'] ?? $item['value'] ?? json_encode($item)) : $item;
+        $listFields = ['cves', 'threat_actors', 'target_objects', 'impact_hardware', 'impact_software', 'mitre_attack'];
+        $keyOf = fn ($item) => is_array($item) ? ($item['cve'] ?? $item['id'] ?? $item['value'] ?? json_encode($item)) : $item;
 
         foreach ($listFields as $field) {
             $incoming = collect($articleData[$field] ?? [])->filter()->values();
@@ -201,7 +215,7 @@ class StoryCorrelator
             'source_url' => $source['url'] ?? null,
             'fields_updated' => array_values(array_unique($fieldsUpdated)),
             'previous_values' => $before,
-            'new_values' => $record->only(['subject', 'severity', 'cves', 'threat_actors', 'mitigation', 'summary']),
+            'new_values' => $record->only($trackFields),
             'created_at' => now(),
         ]);
 
@@ -210,34 +224,46 @@ class StoryCorrelator
 
     private function complete(AiIntegration $ai, string $prompt): string
     {
-        $timeout = $ai->timeout ?? 60;
+        $timeout = max((int) ($ai->timeout ?? 120), 120);
+        $headers = [];
+        if ($ai->provider === 'openrouter' || str_contains((string) $ai->base_url, 'openrouter.ai')) {
+            $headers['HTTP-Referer'] = config('app.url', 'http://127.0.0.1:8000');
+            $headers['X-Title'] = config('app.name', 'CTI Portal');
+        }
 
-        $response = match ($ai->provider) {
-            'gemini' => Http::timeout($timeout)->post(
-                rtrim($ai->base_url ?: 'https://generativelanguage.googleapis.com', '/')."/v1beta/models/{$ai->model_id}:generateContent?key=***>api_key}",
-                ['contents' => [['parts' => [['text' => $prompt]]]]]
-            ),
-            'claude' => Http::timeout($timeout)
-                ->withHeaders(['x-api-key' => $ai->api_key, 'anthropic-version' => '2023-06-01'])
-                ->post(rtrim($ai->base_url ?: 'https://api.anthropic.com', '/').'/v1/messages', [
-                    'model' => $ai->model_id,
-                    'max_tokens' => $ai->max_tokens ?? 512,
-                    'messages' => [['role' => 'user', 'content' => $prompt]],
-                ]),
-            default => Http::timeout($timeout)
-                ->withToken((string) $ai->api_key)
-                ->post(rtrim($ai->base_url ?: 'https://openrouter.ai/api/v1', '/').'/chat/completions', [
-                    'model' => $ai->model_id,
-                    'messages' => [['role' => 'user', 'content' => $prompt]],
-                ]),
-        };
+        return retry(3, function () use ($ai, $prompt, $timeout, $headers) {
+            $response = match ($ai->provider) {
+                'gemini' => Http::timeout($timeout)->post(
+                    rtrim($ai->base_url ?: 'https://generativelanguage.googleapis.com', '/')."/v1beta/models/{$ai->model_id}:generateContent?key=***>api_key}",
+                    ['contents' => [['parts' => [['text' => $prompt]]]]]
+                ),
+                'claude' => Http::timeout($timeout)
+                    ->withHeaders(['x-api-key' => $ai->api_key, 'anthropic-version' => '2023-06-01'])
+                    ->post(rtrim($ai->base_url ?: 'https://api.anthropic.com', '/').'/v1/messages', [
+                        'model' => $ai->model_id,
+                        'max_tokens' => $ai->max_tokens ?? 512,
+                        'messages' => [['role' => 'user', 'content' => $prompt]],
+                    ]),
+                default => Http::timeout($timeout)
+                    ->withHeaders($headers)
+                    ->withToken((string) $ai->api_key)
+                    ->post(rtrim($ai->base_url ?: 'https://openrouter.ai/api/v1', '/').'/chat/completions', [
+                        'model' => $ai->model_id,
+                        'messages' => [['role' => 'user', 'content' => $prompt]],
+                    ]),
+            };
 
-        $response->throw();
+            if ($response->status() === 429) {
+                sleep(2);
+            }
 
-        return match ($ai->provider) {
-            'gemini' => (string) ($response->json('candidates.0.content.parts.0.text') ?? ''),
-            'claude' => (string) ($response->json('content.0.text') ?? ''),
-            default => (string) ($response->json('choices.0.message.content') ?? ''),
-        };
+            $response->throw();
+
+            return match ($ai->provider) {
+                'gemini' => (string) ($response->json('candidates.0.content.parts.0.text') ?? ''),
+                'claude' => (string) ($response->json('content.0.text') ?? ''),
+                default => (string) ($response->json('choices.0.message.content') ?? ''),
+            };
+        }, 2000);
     }
 }

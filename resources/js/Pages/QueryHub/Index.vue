@@ -39,9 +39,23 @@ const form = useForm({
     use_keywords: true,
     ai_integration_id: '',
     match_existing: true,
+    match_lookback_days: 7,
 });
 
 const presets = [1, 3, 7, 14, 30];
+const matchPeriods = [1, 7, 30];
+
+const isAllFeedsSelected = computed(() => {
+    return props.feeds.length > 0 && form.feed_ids.length === props.feeds.length;
+});
+
+function toggleAllFeeds() {
+    if (isAllFeedsSelected.value) {
+        form.feed_ids = [];
+    } else {
+        form.feed_ids = props.feeds.map((f) => f.id);
+    }
+}
 
 function setPreset(days) {
     form.lookback_days = days;
@@ -60,6 +74,7 @@ function runQuery() {
                 showRunModal.value = false;
                 form.feed_ids = [];
                 form.lookback_days = 1;
+                form.match_lookback_days = 7;
             },
         });
 }
@@ -360,7 +375,20 @@ const historyList = computed(() => props.history.data ?? props.history);
                     </div>
 
                     <div>
-                        <InputLabel value="Feeds (leave all unchecked = all active feeds)" />
+                        <div class="flex items-center justify-between">
+                            <InputLabel value="Feeds" />
+                            <button
+                                v-if="feeds.length > 0"
+                                type="button"
+                                @click="toggleAllFeeds"
+                                class="text-xs font-semibold text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+                            >
+                                {{ isAllFeedsSelected ? 'Deselect All' : 'Select All (' + feeds.length + ')' }}
+                            </button>
+                        </div>
+                        <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                            {{ form.feed_ids.length === 0 ? 'Leave all unchecked = all active feeds' : `${form.feed_ids.length} of ${feeds.length} feed(s) selected` }}
+                        </p>
                         <div class="mt-2 max-h-36 space-y-1 overflow-y-auto rounded-md border border-gray-200 p-2 dark:border-gray-700">
                             <label
                                 v-for="feed in feeds"
@@ -390,10 +418,33 @@ const historyList = computed(() => props.history.data ?? props.history);
                         <p class="mt-1 text-xs text-gray-400">Without a configured provider, records are created in fallback (developing) mode.</p>
                     </div>
 
-                    <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                        <input type="checkbox" v-model="form.match_existing" class="rounded" />
-                        Match &amp; update existing developing CTIs
-                    </label>
+                    <div class="space-y-2">
+                        <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                            <input type="checkbox" v-model="form.match_existing" class="rounded" />
+                            Match &amp; update existing developing CTIs
+                        </label>
+
+                        <div v-if="form.match_existing" class="rounded-md border border-indigo-500/20 bg-indigo-50/50 p-3 dark:border-indigo-500/30 dark:bg-indigo-950/20">
+                            <InputLabel value="Period of update to match &amp; update records" class="text-xs font-semibold" />
+                            <div class="mt-2 flex flex-wrap gap-2">
+                                <button
+                                    v-for="d in matchPeriods"
+                                    :key="d"
+                                    type="button"
+                                    @click="form.match_lookback_days = d"
+                                    class="rounded-full px-3 py-1 text-xs font-semibold transition-colors"
+                                    :class="form.match_lookback_days === d
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+                                >
+                                    {{ d }} Day{{ d > 1 ? 's' : '' }} Ago
+                                </button>
+                            </div>
+                            <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                                Checks internal database for matching CTIs updated or created within the last {{ form.match_lookback_days }} day{{ form.match_lookback_days > 1 ? 's' : '' }}.
+                            </p>
+                        </div>
+                    </div>
 
                     <div class="flex justify-end gap-2">
                         <SecondaryButton type="button" @click="showRunModal = false">Cancel</SecondaryButton>
